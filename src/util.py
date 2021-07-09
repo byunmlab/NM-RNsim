@@ -24,6 +24,9 @@ import scipy.sparse.linalg as spsl
 import scipy.optimize as spo # N-K
 import matplotlib.pyplot as plt
 
+import jax
+import jax.numpy as jnp
+
 # List of strings (in lowercase) that are considered equivalent to True
 true_strs = ("true", "t", "yes", "y", "on", "1")
 # List of nonlinear solver methods
