@@ -66,6 +66,17 @@ def ainsrt(x, insertions):
     y = np.insert(y, n, v)
   return y
 
+def ainsrt2(x, i0, v0, i1, v1):
+  """Insert a series of values at the specified indices into the given array.
+  insertions : [(i0, v0), (i1, v1)]
+  Like ainsrt, but specifically for inserting 2 values and compatible with jit.
+  """
+  N = x.size+2
+  x01 = jnp.concatenate([ x[0:i0], v0, x[i0:i1-1], v1, x[i1-1:] ], axis=None)[0:N]
+  x10 = jnp.concatenate([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ], axis=None)[0:N]
+  # Essentially it's an if statement here
+  return jnp.where(i0 < i1, x01, x10)
+
 def db_print(s):
   """Wrapper for standard print()
   Prints to screen if the "debug" setting is True
@@ -319,7 +330,20 @@ def NL_P(G, w, v):
   return v*i
 
 # These two calculate the residuals for a given x vector in the NL system
-def NL_res(A, w, v_in, ni_in, ni_out, x):
+def NL_res_j(x, A, w, v_in, ni_in, ni_out):
+  """NL_res, but compatible with jit.
+  Also take note of the changed order of arguments
+  """
+  N = x.size + 2
+  v = ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
+  vcols, vrows = jnp.meshgrid(v, v)
+  sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
+  Asinh = jnp.multiply(A, jnp.sinh(sinharg))
+  sumI = Asinh.sum(1) / w # sum of currents leaving each node
+  res = sumI.at[ni_in].add(- x[-1])
+  res = res.at[ni_out].add(x[-1])
+  return res[1:] # Throw one equation out
+def NL_res_old(A, w, v_in, ni_in, ni_out, x):
   # Find the residual from the nonlinear verson of KCL
   # Recover the voltage vector
   v = ainsrt(x, [(ni_in, v_in), (ni_out, 0)])[0:-1]
@@ -379,7 +403,7 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     ni_in (int) : the index of the input node [0,N-1]
     ni_out (int) : the index of the output node [0,N-1]
     xi (N+1 np array) : initial guess for the solution. If None, xi=0
-      Maybe providing this could speed it up a lot. Idk.
+      If "Lcg", then find an xi by solving the linear system with cg
     method ("n-k", "hybr", "trf", "mlt") : the solution method 
       see util.NL_methods
       (n-k and hybr are suggested, but there's also trf)
@@ -394,6 +418,8 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       Note: x[-1] = I_in and x is missing v_in & v_out
   """
 
+  times = tic()
+
   if "verbose" not in opt:
     opt["verbose"] = debug
   if type(opt["verbose"]) != int:
@@ -401,22 +427,51 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   if opt["verbose"] > 2:
     db_print(f"Starting Nonlinear Solver: {method}")
   N = A.shape[1]-1 # len(x) = N_nodes + 1 - 2
+  if xi is None:
+    xi = jnp.zeros(N).at[ni_in].set(v_in)
+  elif xi == "Lcg":
+    # Get xi from the linear system, solving with cg
+    L = L_from_A(A)
+    vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
+    xL = np.append(vL, v_in / RL) # convert v to x
+    xL = np.delete(xL, [ni_in, ni_out])
+    xi = jnp.array(xL)
+    toc(times, "Lcg")
+  else:
+    xi = jnp.array(xi)
+  if hasattr(A, "toarray"):
+    # Convert to jax array
+    A = jnp.array(A.toarray())
   ubound = v_in * np.ones(N)
   ubound[-1] = np.inf # No bound on current
   bounds = (np.zeros(N)-1e-6, ubound+1e-6)
-  if xi is None:
-    #xi = np.zeros(A.shape[1]+1)
-    xi = np.zeros(N)
-    xi[ni_in] = v_in
+
+  # Create jit compiled versions of the function
+  jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5])
+  res = lambda x: jres(x, A, w, v_in, ni_in, ni_out)
+  jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5])
+  jac = lambda x: jjac(x, A, w, v_in, ni_in, ni_out)
+
+  toc(times, "jit")
+  rxi = res(xi)
+  db_print(f"res(xi): {rxi}")
+  toc(times, "res(xi)")
+  if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
+    # If xi is already within tolerance, we're done
+    def sol(): pass
+    sol.x = xi
+    sol.fun = rxi
+    return sol
 
   if method == "mlt":
     # Chain multiple solvers
     #ltol = 5e-3
     stol = opt["xtol"] if "xtol" in opt else 1e-4
     # List of solvers and tolerances
-    methods = [("Lcg", 1e-7),
+    methods = [
+      #("Lcg", 1e-7),
       #("hybr", ltol),
-      #("trf", ltol),
+      ("trf", 10*stol),
       ("hybr", stol)]#,
       #("trf", stol),
       #("n-k", stol)]
@@ -424,7 +479,7 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     return sol
 
   elif method == "n-k":
-    residual = lambda x: NL_res(A, w, v_in, ni_in, ni_out, x)
+    #residual = lambda x: NL_res(A, w, v_in, ni_in, ni_out, x)
     xtol = opt["xtol"] if "xtol" in opt else 1e-3
     ftol = opt["ftol"] if "ftol" in opt else 1e-2
     if "tol" in opt: # Generic tol
@@ -435,9 +490,9 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       "ftol": ftol,
       "jac_options": {"rdiff": .05}
       }
-    sol = spo.root(residual, xi, method="krylov", options=nkopt)
+    sol = spo.root(res, xi, method="krylov", options=nkopt)
   elif method == "hybr":
-    res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
+    #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
     xtol = opt["xtol"] if "xtol" in opt else 1e-3
     if "tol" in opt:
       xtol = opt["tol"]
@@ -447,9 +502,13 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     # Scale the variable for current so it's more significant
     hopt["diag"] = np.ones(N)
     hopt["diag"][-1] = N
-    sol = spo.root(res_jac, xi, method="hybr", jac=True, options=hopt)
+    #sol = spo.root(res_jac, xi, method="hybr", jac=True, options=hopt)
+    sol = spo.root(res, xi, method="hybr", jac=jac, options=hopt)
+    toc(times, "hybr")
+    db_print(f"res(sol.x): {res(sol.x)}")
+    toc(times, "res(sol.x)")
   elif method == "trf":
-    res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
+    #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
     # The least_squares method doesn't take an options argument.
     #   Instead, expand opt like this: **opt
     #   "verbose" is an option in least_squares {0,1,2}
@@ -467,33 +526,34 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       opt["xtol"] = 1e-6
     if "gtol" not in opt:
       opt["gtol"] = 1e-10
-    last_x = None
-    last_res = None
-    last_jac = None
+    #last_x = None
+    #last_res = None
+    #last_jac = None
     # These functions only recalculate if needed
     # This mimics how the spo.root function handels jac=True
-    def res(x):
-      nonlocal last_res
-      nonlocal last_jac
-      nonlocal last_x
-      if not np.all(x == last_x):
-        last_res, last_jac = res_jac(x)
-        last_x = x
-      return last_res
-    def jac(x):
-      nonlocal last_res
-      nonlocal last_jac
-      nonlocal last_x
-      if not np.all(x == last_x):
-        last_res, last_jac = res_jac(x)
-        last_x = x
-      return last_jac
+    #def res(x):
+    #  nonlocal last_res
+    #  nonlocal last_jac
+    #  nonlocal last_x
+    #  if not np.all(x == last_x):
+    #    last_res, last_jac = res_jac(x)
+    #    last_x = x
+    #  return last_res
+    #def jac(x):
+    #  nonlocal last_res
+    #  nonlocal last_jac
+    #  nonlocal last_x
+    #  if not np.all(x == last_x):
+    #    last_res, last_jac = res_jac(x)
+    #    last_x = x
+    #  return last_jac
     xi = xi.flatten()
     sol = spo.least_squares(res, xi, jac=jac, method="trf", **opt)
 
+  toc(times, "NL_sol", total=True)
   return sol
 
-def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
+def NL_mlt(A, L, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
   """More convenient interface for NL_sol(method="mlt")
   Parameters
   ----------
@@ -579,22 +639,21 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
   """
 
   # Initial r
-  rxi = np.linalg.norm(NL_res(A, w, v_in, ni_in, ni_out, xi))
+  rxi = np.linalg.norm(NL_res_j(xi, A, w, v_in, ni_in, ni_out))
   for mtd, tol in methods:
     if opt["verbose"]:
       print(579, f"Running method {mtd} with tol={tol}")
-    if mtd == "Lcg": # Linear, cg
-      L = L_from_A(A) #Laplacian
-      v1, R1, status = L_sol(L, v_in, ni_in, ni_out, tol=tol)
-      x1 = np.append(v1, v_in / R1) # convert v to x
-      x1 = np.delete(x1, [ni_in, ni_out])
-      def sol(): pass # Make empty sol object
-      sol.success = (status == 0)
-      sol.message = ""
-      sol.nfev = -1
-      sol.x = x1
-      sol.fun = NL_res(A, w, v_in, ni_in, ni_out, x1)
-    elif mtd in NL_methods:
+    #if mtd == "Lcg": # Linear, cg
+    #  v1, R1, status = L_sol(L, v_in, ni_in, ni_out, tol=tol)
+    #  x1 = np.append(v1, v_in / R1) # convert v to x
+    #  x1 = np.delete(x1, [ni_in, ni_out])
+    #  def sol(): pass # Make empty sol object
+    #  sol.success = (status == 0)
+    #  sol.message = ""
+    #  sol.nfev = -1
+    #  sol.x = x1
+    #  sol.fun = NL_res_j(x1, A, w, v_in, ni_in, ni_out)
+    if mtd in NL_methods:
       opt["tol"] = tol
       sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=mtd, opt=opt)
     else:

@@ -723,16 +723,13 @@ class ResistorNetwork:
       #   when solving the nonlinear problem.
       Adj = nx.linalg.graphmatrix.adjacency_matrix(self.G, weight="cnd",
         nodelist=self.node_list)
-      # TODO: Maybe use the xi option.
       # TODO: Also use the other paremeters for the N-K method.
-      # TODO: Have some way to know if it succeeded or not.
-      vrb = 2#2
+      # TODO: Keep track of if it succeeded or not.
+      vrb = 2#TMP
       opt = {"verbose" : vrb,
         "xtol" : self.xtol}
-      # OLD:
-      #v = util.NL_Axb(Adj, b, w=self.res_w, method=self.sol_method, opt=opt)
-      #v -= v[gdi] # Ground the ground pin
-      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i,
+      # OLD: v = util.NL_Axb(Adj, b, w=self.res_w, method=self.sol_method, opt=opt)
+      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
         method=self.sol_method, opt=opt)
       v = util.ainsrt(sol.x, [(n0i, v_in), (n1i, 0)])[0:-1]
       I_in = sol.x[-1]
