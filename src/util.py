@@ -30,7 +30,7 @@ import jax.numpy as jnp
 # List of strings (in lowercase) that are considered equivalent to True
 true_strs = ("true", "t", "yes", "y", "on", "1")
 # List of nonlinear solver methods
-NL_methods = ("n-k", "hybr", "trf", "mlt")
+NL_methods = ("n-k", "hybr", "trf", "mlt", "custom")
 # Debugging boolean - to be set from cp.getboolean("exec", "debug")
 debug = False
 timing = False
@@ -309,6 +309,46 @@ def min_LS_dist(p0, p1, v0, v1, dmaxt=None):
   
   return (dmin, pmin)
 
+def parabola_opt(fx0, fx1, fx2):
+  """Find the root of a parabola running through the points
+  (0, fx0), (1,fx1), (2,fx2)
+  """
+  xc = (3*fx0 - 4*fx1 + fx2) / (2*fx0 - 4*fx1 + 2*fx2)
+  #print(316, fx0, fx1, fx2, xc)
+  if jnp.isnan(xc):
+    return 1
+  eps = 1e-6
+  return max(min(xc, 2-eps), eps)
+
+def line_min(f, x0, fx0, dx, mlt=1, fx2=None, nfev=0, fev_max=16):
+  """Find the best step size multiplier to apply to dx
+  """
+  fx1 = f(x0 + dx*mlt)
+  nfev += 1
+  #print(323, fx0, fx1)
+  if fx1 >= fx0:
+    if nfev < fev_max:
+      return line_min(f, x0, fx0, dx, mlt=.5*mlt, fx2=fx1, nfev=nfev)
+    else:
+      return .5*mlt, nfev
+  if fx2 is None:
+    fx2 = f(x0 + dx*mlt*2)
+    nfev += 1
+  if fx2 >= fx1:
+    # mlt is in (0,2)
+    return (parabola_opt(fx0, fx1, fx2))*mlt, nfev
+  # mlt > 1
+  fn = [fx0, fx1, fx2]
+  i = 2
+  while fn[i] < fn[i-1]:
+    i += 1
+    #fn[i] =
+    fn.append( f(x0 + dx*mlt*i) )
+    nfev += 1
+    #print(337, fn[i])
+  # The optimum is between the last three values
+  return (i-2 + parabola_opt(*fn[-3:]))*mlt, nfev
+
 def NL_I(G, w, v):
   """Simple calculation of current in the nonlinear system.
   Parameters
@@ -329,7 +369,7 @@ def NL_P(G, w, v):
   i = NL_I(G, w, v)
   return v*i
 
-# These two calculate the residuals for a given x vector in the NL system
+# These calculate the residuals for a given x vector in the NL system
 def NL_res_j(x, A, w, v_in, ni_in, ni_out):
   """NL_res, but compatible with jit.
   Also take note of the changed order of arguments
@@ -342,7 +382,7 @@ def NL_res_j(x, A, w, v_in, ni_in, ni_out):
   sumI = Asinh.sum(1) / w # sum of currents leaving each node
   res = sumI.at[ni_in].add(- x[-1])
   res = res.at[ni_out].add(x[-1])
-  return res[1:] # Throw one equation out
+  return res#[1:] # Throw one equation out
 def NL_res_old(A, w, v_in, ni_in, ni_out, x):
   # Find the residual from the nonlinear verson of KCL
   # Recover the voltage vector
@@ -404,6 +444,8 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     ni_out (int) : the index of the output node [0,N-1]
     xi (N+1 np array) : initial guess for the solution. If None, xi=0
       If "Lcg", then find an xi by solving the linear system with cg
+      If "L_{nonlin_method}_{N} then solve sequentially for better xi-s
+        by gradually increasing the nonlinearity N times.
     method ("n-k", "hybr", "trf", "mlt") : the solution method 
       see util.NL_methods
       (n-k and hybr are suggested, but there's also trf)
@@ -437,6 +479,28 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     xL = np.delete(xL, [ni_in, ni_out])
     xi = jnp.array(xL)
     toc(times, "Lcg")
+  elif isinstance(xi, str):
+    assert xi[0] == "L"
+    xi_parts = xi.split("_") 
+    N = int(xi_parts[2])
+    ximethod = xi_parts[1]
+    assert ximethod in NL_methods
+    # Get xi from the linear system, solving with cg
+    L = L_from_A(A)
+    vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
+    xL = np.append(vL, v_in / RL) # convert v to x
+    xL = np.delete(xL, [ni_in, ni_out])
+    xi = jnp.array(xL)
+    toc(times, "Lcg")
+    # Make N simpler versions of the system to solve
+    for i in range(N):
+      wi = w * ( (i+1)/(N+1) )**2
+      soli = NL_sol(A, wi, v_in, ni_in, ni_out, xi=xi, method=ximethod, 
+        opt={"ftol":5e-5})
+      #db_print(soli.__dict__)
+      xi = soli.x
+    print(503, "Done with presolving")
+    toc(times, f"xi presolving, method={ximethod}")
   else:
     xi = jnp.array(xi)
   if hasattr(A, "toarray"):
@@ -452,9 +516,9 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5])
   jac = lambda x: jjac(x, A, w, v_in, ni_in, ni_out)
 
-  toc(times, "jit")
+  #toc(times, "jit")
   rxi = res(xi)
-  db_print(f"res(xi): {rxi}")
+  db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}")
   toc(times, "res(xi)")
   if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
     # If xi is already within tolerance, we're done
@@ -478,6 +542,17 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=stol, opt=opt)
     return sol
 
+  elif method == "custom":
+    options = {
+      "maxit": 400,
+      "xtol": 1e-10,
+      "rtol": opt["ftol"] if "ftol" in opt else 1e-4,
+      "leash": 8,
+      "momentum": 0.5
+    }
+    sol = NL_custom_N(res, jac, xi, options)
+    toc(times, f"Custom Newton solver (w={w})")
+
   elif method == "n-k":
     #residual = lambda x: NL_res(A, w, v_in, ni_in, ni_out, x)
     xtol = opt["xtol"] if "xtol" in opt else 1e-3
@@ -492,6 +567,9 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       }
     sol = spo.root(res, xi, method="krylov", options=nkopt)
   elif method == "hybr":
+    # Make it square for hybr
+    res = lambda x: jres(x, A, w, v_in, ni_in, ni_out)[1:]
+    jac = lambda x: jjac(x, A, w, v_in, ni_in, ni_out)[1:]
     #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
     xtol = opt["xtol"] if "xtol" in opt else 1e-3
     if "tol" in opt:
@@ -502,11 +580,12 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     # Scale the variable for current so it's more significant
     hopt["diag"] = np.ones(N)
     hopt["diag"][-1] = N
+    #db_print(f"583: xi={xi}")
     #sol = spo.root(res_jac, xi, method="hybr", jac=True, options=hopt)
     sol = spo.root(res, xi, method="hybr", jac=jac, options=hopt)
-    toc(times, "hybr")
-    db_print(f"res(sol.x): {res(sol.x)}")
-    toc(times, "res(sol.x)")
+    toc(times, f"hybr (w={w})")
+    #db_print(f"||res(sol.x)||: {jnp.linalg.norm(res(sol.x))}")
+    #toc(times, "res(sol.x)")
   elif method == "trf":
     #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
     # The least_squares method doesn't take an options argument.
@@ -551,6 +630,84 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     sol = spo.least_squares(res, xi, jac=jac, method="trf", **opt)
 
   toc(times, "NL_sol", total=True)
+  return sol
+
+def NL_custom_N(res, jac, xi, options):
+  """Custom solver, using a modified version of Newton's method
+  """
+  err = 1
+  rtol = options["rtol"] if "rtol" in options else 1e-4
+  nstep = 1
+  nstep_2avg = 1
+  xtol = options["xtol"] if "xtol" in options else 1e-9
+  # How far it can go astray without resetting back to last min
+  leash = options["leash"] if "leash" in options else 16
+  nfev = 0
+  it = 0
+  maxit = options["maxit"] if "maxit" in options else 500
+  fnorm = lambda x: jnp.linalg.norm(res(x))
+  # This makes the newton steps more like acceleration than velocity
+  momentum = options["momentum"] if "momentum" in options else 0.2
+  laststep = jnp.zeros(xi.shape)
+  x1 = xi
+  r1 = res(x1)
+  err = jnp.linalg.norm(r1)
+  itsince = 0
+  xm_used = False # Has this xm already been reset back to?
+  xm = x1 # x_min - best x so far
+  rm = r1
+  errm = jnp.linalg.norm(rm)
+  while(it < maxit and err > rtol and nstep_2avg > xtol):
+    J1 = jac(x1)
+    step, *_ = jnp.linalg.lstsq(J1, -r1)
+    # Find the best step along that line
+    step_mlt, lm_fev = line_min(fnorm, x1, err, step) # Simple 1D optimization
+    print(536, step_mlt, lm_fev)
+    nfev += lm_fev
+    step *= step_mlt
+    step += laststep*momentum # Apply momentum
+    laststep = step
+    x1 = x1 + step
+    r1 = res(x1)
+    nfev += 1
+    err = jnp.linalg.norm(r1)
+    if err < errm:
+      xm = x1
+      rm = r1
+      errm = err
+      itsince = 0
+      xm_used = False
+    else:
+      itsince += 1
+      if itsince > leash:
+        if xm_used:
+          db_print(f"No improvement in the last {leash} iterations since"
+            " the last reset")
+          # We're in a loop. No improvement has occurred since last reset
+          break
+        # Reset back to xm
+        x1 = xm
+        r1 = rm
+        err = errm
+        laststep = jnp.zeros(xi.shape)
+        itsince = 0
+        xm_used = True
+        db_print("Reset back to x_min")
+
+    it += 1
+    last_nstep = nstep
+    nstep = jnp.linalg.norm(step)
+    # Use a running average to allow occasional tiny steps
+    nstep_2avg = (nstep + last_nstep) / 2
+    #dJ = jnp.linalg.det(J1)
+    nJs = jnp.linalg.norm( jnp.dot(J1, step) )
+    db_print(f"At it#{it}/{maxit}, err={err}, ||step||={nstep},"# |J|={dJ},"
+      f" ||J*step||={nJs}")
+  def sol(): pass
+  sol.x = xm
+  sol.fun = rm
+  sol.err = errm
+  sol.it = it
   return sol
 
 def NL_mlt(A, L, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):

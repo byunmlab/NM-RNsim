@@ -16,7 +16,6 @@ class ResistorNetwork:
   """
   rand_s = 2 # Random seed for repeatability. If None, no seed is set.
   sdevmax = 4 # How many Standard Deviations to consider before clipping.
-  nonlin_methods = ("n-k", "hybr", "trf", "mlt") # Nonlinear methods
   
   # Plotting options
   plt_node_size = 7#50 #default is 300, which is pretty big.
@@ -729,10 +728,16 @@ class ResistorNetwork:
       opt = {"verbose" : vrb,
         "xtol" : self.xtol}
       # OLD: v = util.NL_Axb(Adj, b, w=self.res_w, method=self.sol_method, opt=opt)
-      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
+      #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
+      #  method=self.sol_method, opt=opt)
+      #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_custom_32",
+      #  method=self.sol_method, opt=opt)
+      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_hybr_4",
         method=self.sol_method, opt=opt)
       v = util.ainsrt(sol.x, [(n0i, v_in), (n1i, 0)])[0:-1]
+      v = np.array(v, dtype=np.float) #Convert back to np
       I_in = sol.x[-1]
+      I_in = np.float(I_in) #Convert back to np
       print(848, v[n0i], v[n1i], I_in)
       Req = v_in / I_in
     else:
