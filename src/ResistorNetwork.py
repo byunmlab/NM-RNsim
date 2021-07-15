@@ -48,6 +48,8 @@ class ResistorNetwork:
   burn_rate = 4
   # Used if burn power was not specified in config
   brn_pwr = 1
+  # Whether to burn fibers or edges when training
+  burn_fibers = True
 
   def __init__(self, N=500, limits=[0,1, 0,1], in_pins=[], out_pins=[],
     pts=None, cnd_len=0.15, pin_r=0.25, fibers=True, 
@@ -517,7 +519,7 @@ class ResistorNetwork:
     for pin in self.pins:
       pin_atrb = {}
       # The pins need to be assigned a brn_pwr
-      pin_atrb["bpwr"] = 100*np.max(self.bpwr_mus)
+      pin_atrb["bpwr"] = 1e6*np.max(self.bpwr_mus)
       
       # Add the pin with the provided key and location
       G.add_node(pin[0], pos=pin[1], **pin_atrb)
@@ -693,7 +695,7 @@ class ResistorNetwork:
     n0 = self.index_to_key(i0)
     n1 = self.index_to_key(i1)
     return self.R_nn(n0, n1)
-  
+
   def apply_v(self, v_in, n0, n1, set_v=True, set_p=True, set_i=False):
     """ Apply a voltage across the two given pins/nodes
       Save the resulting voltage and power as attributes in each node or edge
@@ -711,10 +713,6 @@ class ResistorNetwork:
       (if set_p) (p_max_e, e_p_max) : (the max edge power, the corrosponding edge)
       (if set_p) (p_max_n, n_p_max) : (the max node power, the corrosponding node)
     """
-    # Solution method: "spsolve", "splsqr", "cg"
-    # splsqr is currently having issues, apparantly due the the Lpl having a 
-    #   high condition number because of the pins. I think.
-    #self.sol_method = "cg"
     
     # Find the indices of the pins used
     n0i = self.key_to_index(n0)
@@ -813,49 +811,6 @@ class ResistorNetwork:
       
       return (p_max_e, e_p_max), (p_max_n, n_p_max), Req
 
-  def burn(self, to_burn="p_max"):
-    """Remove the fibers that have too much power flowing through them.
-    Before running this function, apply_v should have been run with set_p=True
-    
-    Parameters
-    ----------
-    to_burn : Specify which fibers to burn. If set to "p_max", then it will
-      burn all fibers with p > self.brn_pwr.
-      If a list is passed, then those fibers will be burned.
-      If an integer is passed, then that number of nodes will be burned,
-        starting at the highest power nodes.
-      For example, if set to 1, then the max power node will be burned.
-    
-    Returns
-    -------
-    fibers_burned (int) : How many fibers were removed.
-    """
-    
-    if to_burn == "p_max":
-      util.db_print("Removing high-power fibers")
-      #util.db_print("Hopefully apply_v(set_p=True) has been done already...")
-      to_burn = []
-      for node in self.G.nodes:
-        brn_pwr = (self.G.nodes[node]["bpwr"]
-          if "bpwr" in self.G.nodes[node]
-          else self.brn_pwr)
-        #brn_pwr = (self.brn_pwr if (self.bpwr_span == 0) 
-        #  else self.G.nodes[node]["bpwr"])
-        if self.G.nodes[node]["p"] > brn_pwr:
-          to_burn.append(node)
-      util.db_print(f"to_burn = {to_burn}") # TEMP
-    if isinstance(to_burn, int):
-      to_burn = self.get_maxp_nodes(to_burn)[0]
-    if None in to_burn:
-      # Either the network is totally broken or apply_v needs to be called.
-      util.db_print("Not enough nodes with power in them were found.")
-      return 0
-    for node in to_burn:
-      self.remove_node(node)
-    fibers_burned = len(to_burn)
-    util.db_print(f"{fibers_burned} fibers were removed")
-    return fibers_burned
-
   def get_maxp_nodes(self, n=1, relative=True, eps_pf=0.01):
     """Find the node with the highest power.
     Before running this function, apply_v should have been run with set_p=True
@@ -911,6 +866,140 @@ class ResistorNetwork:
       #util.db_print(f"1015: eps_burn caught {burn_i-n} extra fibers")
     #print(997, mp_nodes, mp_nodes_data)
     return mp_nodes, mp_nodes_data
+
+  def burn(self, to_burn="p_max"):
+    """Remove the fibers that have too much power flowing through them.
+    Before running this function, apply_v should have been run with set_p=True
+    
+    Parameters
+    ----------
+    to_burn : Specify which fibers to burn. If set to "p_max", then it will
+      burn all fibers with p > self.brn_pwr.
+      If a list is passed, then those fibers will be burned.
+      If an integer is passed, then that number of nodes will be burned,
+        starting at the highest power nodes.
+      For example, if set to 1, then the max power node will be burned.
+    
+    Returns
+    -------
+    fibers_burned (int) : How many fibers were removed.
+    """
+    
+    if to_burn == "p_max":
+      util.db_print("Removing high-power fibers")
+      #util.db_print("Hopefully apply_v(set_p=True) has been done already...")
+      to_burn = []
+      for node in self.G.nodes:
+        brn_pwr = (self.G.nodes[node]["bpwr"]
+          if "bpwr" in self.G.nodes[node]
+          else self.brn_pwr)
+        #brn_pwr = (self.brn_pwr if (self.bpwr_span == 0) 
+        #  else self.G.nodes[node]["bpwr"])
+        if self.G.nodes[node]["p"] > brn_pwr:
+          to_burn.append(node)
+      util.db_print(f"to_burn = {to_burn}") # TEMP
+    if isinstance(to_burn, int):
+      if to_burn < 1:
+        return 0
+      to_burn = self.get_maxp_nodes(to_burn)[0]
+    if None in to_burn:
+      # Either the network is totally broken or apply_v needs to be called.
+      util.db_print("Not enough nodes with power in them were found.")
+      return 0
+    for node in to_burn:
+      self.remove_node(node)
+    fibers_burned = len(to_burn)
+    util.db_print(f"{fibers_burned} fibers were removed")
+    return fibers_burned
+
+  def get_maxp_edges(self, n=1, relative=True, eps_pf=0.01):
+    """Find the edge with the highest power.
+    Before running this function, apply_v should have been run with set_p=True
+    
+    Parameters
+    ----------
+    n (int) : Number of edges to return
+    relative (bool) : Whether to consider the highest relative power.
+      ie p_rel = p / bpwr
+      This better reflects which edges we expect to burn first.
+    eps_pf (float) : If eps_pf > 0 is given, then be sure to burn out any edges
+      that are within eps power of the lowest power edge that would normally be
+      burned. "_pf" is for Power Fraction, since it's a fraction of that power.
+    
+    Returns
+    -------
+    mp_edges : the max power edges with data
+    """
+    
+    # If eps_pf>0, then sort more than n fibers
+    N = max(4*n+100, int(self.size()/10)) if eps_pf>0 else n
+    max_ps = np.zeros(N)
+    mp_edges = np.array( [(None,None,{})] * N )
+    # This code populates mp_edges with the 
+    #   N highest power edges, sorted.
+    for edge in self.G.edges(data=True):
+      e_p = edge[2]["p"] # Assumes apply_v(set_p) already done
+      if relative:
+        ebpwr = edge[2]["bpwr"] if "bpwr" in edge[2] else self.brn_pwr
+        # Adjust the actual edge power to a "relative power" value.
+        # This means power as a fraction of the edge burn power.
+        e_p = e_p / ebpwr
+      if e_p > np.min(max_ps):
+        # Now place this edge in its correct, sorted position
+        i = np.count_nonzero(max_ps > e_p)
+        max_ps[i+1:] = max_ps[i:-1] # Shift
+        max_ps[i] = e_p # Insert
+        mp_edges[i+1:] = mp_edges[i:-1] # Shift
+        mp_edges[i] = edge # Insert
+    if eps_pf > 0:
+      # This is the lowest power that would be burned if it weren't for eps_pf
+      bpwr_n = max_ps[n-1]
+      eps_bpwr = bpwr_n * (1-eps_pf)
+      # Cut out those without enough power
+      mp_edges = mp_edges[max_ps > eps_bpwr]
+      #util.db_print(f"1015: eps_burn caught {burn_i-n} extra fibers")
+    return mp_edges
+
+  def edge_burn(self, to_burn="p_max"):
+    """Remove the edges that have too much power flowing through them.
+    Before running this function, apply_v should have been run with set_p=True
+    Same method as rn.burn(), but for edges, not fibers
+    
+    Parameters
+    ----------
+    to_burn : Specify which edges to burn. If set to "p_max", then it will
+      burn all edges with p > self.brn_pwr.
+      If a list is passed, then those edges will be burned.
+      If an integer is passed, then that number of nodes will be burned,
+        starting at the highest power nodes.
+      For example, if set to 1, then the max power node will be burned.
+    
+    Returns
+    -------
+    edges_burned (int) : How many edges were removed.
+    """
+    
+    if to_burn == "p_max":
+      util.db_print("Removing high-power edges")
+      #util.db_print("Hopefully apply_v(set_p=True) has been done already...")
+      to_burn = []
+      for edge in self.G.edges(data=True):
+        brn_pwr = (edge[2]["bpwr"]
+          if "bpwr" in edge[2]
+          else self.brn_pwr)
+        if edge[2]["p"] > brn_pwr:
+          to_burn.append(edge)
+      util.db_print(f"to_burn = {to_burn}") # TEMP
+    if isinstance(to_burn, int):
+      to_burn = self.get_maxp_edges(to_burn)
+    if None in to_burn:
+      # Either the network is totally broken or apply_v needs to be called.
+      util.db_print("Not enough nodes with power in them were found.")
+      return 0
+    self.G.remove_edges_from(to_burn)
+    edges_burned = len(to_burn)
+    util.db_print(f"{edges_burned} edges were removed")
+    return edges_burned
 
   def draw(self, fig=None, ax=None, width_attrib=None, color_attrib=None,
     edge_color="b", to_mark=[], annotate_is=False):
@@ -1330,7 +1419,10 @@ class ResistorNetwork:
       burn_rate = int(np.ceil(burn_fraction*self.burn_rate))
       #util.db_print(f"Burning from {p_in} to {p_out}")
       self.set_voltages(self.bpV, p_in, p_out)
-      self.burn(burn_rate) # Burn the N highest power nodes (N=burn_rate)
+      if self.burn_fibers:
+        self.burn(burn_rate) # Burn the N highest power nodes (N=burn_rate)
+      else:
+        self.edge_burn(burn_rate)
     
     return False
 

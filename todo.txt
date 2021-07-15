@@ -1,10 +1,10 @@
 CURRENT TO DO:
 - Migrate to jax + optax
-  - set up docker image (w/ nvidia cuda + jax)
+	- Ask about optax being slower than scipy.root -- is there anything else I should try?
+- Try burning edges instead of fibers (rn.edge_burn)
+- Try scipy basinhopping
+- See which methods work will with a tiny RN, like N=16. Look for patterns.
 - Separate the fwd_pass and RMSR calculation into two functions
-- See if we can recreate XORs with the new NL system
-- Speed up the solvers?
-- If it's still giving me trouble, I can reduce res_w. That should help.
 
 Expansions:
 - Scale / configure sim better to reality
@@ -20,12 +20,21 @@ Expansions:
   - Nonlinear Feedback?
 
 IN PROGRESS:
-112_v3 : Repeat 112 with really NL system
-113 : Vary the fiber length distribution stddev
+- jax/T6k: it seems to be a lot faster now
+- Reworking NL_sol for optax. See ~/NMLAB/code_testing/NMLab2/src/sol.py
 
 RECENTLY DONE:
+- 115: Smaller network with longer fibers, trying to make XOR
+- Fix it so that it will finish after Lcg if it's already within tolerance (e.g. v_in=0) -- done on branch jax
+- Tried jax.jit version of spo.root, it turned out slower. Well, but that GPU was full at the time. Now it looks significantly faster.
+114 : Looks like nothing exciting
+113 : Vary the fiber length distribution stddev
+- Note: None of the sims I've run since fixing the NL system are coming close. They're looking more linear; at least, I haven't had any 0b11 outputs lower than 0b01 or 0b10 outputs.
+112_v3 : Repeat 112 with really NL system
 - Run new FP on 100_18r2 --> Not XOR
 - mlt method: xi from cg or hybr
+
+OLDER DONE:
 112_v2 : Repeat of 112, but with NL output current calculation.
 112 : Repeat 97 (vary ks), with new burn technique.
 111_v2 : Repeat of 111 but with new, adaptive burn_rate
@@ -39,8 +48,6 @@ RECENTLY DONE:
 108 : Compare preburning to w/o preburning
 107 : Try to replicate 100_18 - No successful.
 106 : Vary ftype_proportions
-
-OLDER DONE:
 105 : Try with lower ks
 101B : Continuation of 101 (one difference: new power calculation)
 102_v2 : Redo 102 with accurate NL power calculation.

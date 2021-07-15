@@ -431,9 +431,11 @@ def train_set_sim(cp, rn):
   RMSR_mode = cp.get(sim_section, "RMSR_mode").lower()
   plot_RMSR = cp.getboolean(sim_section, "plot_RMSR")
   preburn_fraction = cp.getfloat(sim_section, "II_OO_preburn_fraction")
+  burn_fibers = cp.getboolean(sim_section, "burn_fibers")
 
   rn.threshold_fraction = threshold_fraction
   rn.burn_rate = burn_rate
+  rn.burn_fibers = burn_fibers
 
   # Load the IO file as a np.array
   IO_Ns = load_IO(IO_fname, npa=True)
