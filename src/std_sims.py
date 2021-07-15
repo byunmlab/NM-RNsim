@@ -459,7 +459,10 @@ def train_set_sim(cp, rn):
       #db_print(f"443, Burn some fibers out between {p0} and {p1}")
       rn.apply_v(rn.bpV, p0, p1)
       # Burn 0.1% of the RN (+eps)
-      rn.burn(int(rn.N * preburn_fraction))
+      if burn_fibers:
+        rn.burn(int(rn.N * preburn_fraction))
+      else:
+        rn.edge_burn(int(rn.N * preburn_fraction))
     RN.save_RN(rn, f"RN_{cp.sim_id}_preburnt.{cp.save_format}")
     toc(times, "Preburning")
 
