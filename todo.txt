@@ -1,29 +1,20 @@
 CURRENT TO DO:
 - Migrate to jax + optax
-	- Ask about optax being slower than scipy.root -- is there anything else I should try?
-- Try burning edges instead of fibers (rn.edge_burn)
-- Try scipy basinhopping
-- See which methods work will with a tiny RN, like N=16. Look for patterns.
-- Separate the fwd_pass and RMSR calculation into two functions
-
-Expansions:
-- Scale / configure sim better to reality
-  - https://www.conductivecomposites.com/pdf/Nanostrand_datasheet.pdf
-  - Can I model Inductance & Capacitance? Will that be significant?
-- Maybe add a probabalistic function for which burns
-- Work on a version of NL_sol that has diodes on the outputs.
-  - It doesn't seem that backwards currents happen naturally. I don't think it's worth the trouble since it would make the matrix non-symmetrical... (though that isn't a problem with some of the NL solvers)
-- Things to try
-  - Isolate the pins from each other with walls
-    - Ooh, or we can burn between them! i0-i1 & o0-o1 (preburning)
-  - Change order of training?
-  - Nonlinear Feedback?
+	- Maybe try 2nd order optax things?
+	- Figure out how to use sparse matrices in jax
+- Try scipy basinhopping & compare to TRF & HYBR
+- Start other T3k sims and compare
+- Make adaptive method that tries HYBR first, then TRF if there's KCL error.
 
 IN PROGRESS:
-- jax/T6k: it seems to be a lot faster now
-- Reworking NL_sol for optax. See ~/NMLAB/code_testing/NMLab2/src/sol.py
+- 116_1r1164 - Compare MLT(HYBR) & GPU & TRF & MLT2 (corrected MLT)
+- 116 : Try again, varying burn aggressiveness
+- 117 : Repeat 116 with edges instead of fibers. Hopefully we should be able to see which works better.
+- 116_E : Repeat 116 with edges instead of fibers. This time with the same rands.
 
 RECENTLY DONE:
+- Try burning edges instead of fibers (rn.edge_burn)
+- See which methods work will with a tiny RN, like N=16. Look for patterns.
 - 115: Smaller network with longer fibers, trying to make XOR
 - Fix it so that it will finish after Lcg if it's already within tolerance (e.g. v_in=0) -- done on branch jax
 - Tried jax.jit version of spo.root, it turned out slower. Well, but that GPU was full at the time. Now it looks significantly faster.
@@ -69,10 +60,22 @@ OLDER DONE:
 - 89 - 92 : train_set sims with N=2k-2.5k. Now with 4-8 cycles.
 - 93,94 : vary res_w and bpwr
 
+Expansions:
+- Scale / configure sim better to reality
+  - https://www.conductivecomposites.com/pdf/Nanostrand_datasheet.pdf
+  - Can I model Inductance & Capacitance? Will that be significant?
+- Maybe add a probabalistic function for which burns
+- Work on a version of NL_sol that has diodes on the outputs.
+  - It doesn't seem that backwards currents happen naturally. I don't think it's worth the trouble since it would make the matrix non-symmetrical... (though that isn't a problem with some of the NL solvers)
+- Separate the fwd_pass and RMSR calculation into two functions
+- Things to try
+  - Isolate the pins from each other with walls
+    - Ooh, or we can burn between them! i0-i1 & o0-o1 (preburning)
+  - Change order of training?
+  - Nonlinear Feedback?
+
 Questions:
-- Why do they burn near V+, not V-? Bug? 
-  - I think it was just coincidence... Or maybe it's an artifact of the cg method.
-  - Is it consistent? Kind of, so far...
+- From physical research, do we know if removing edges or fibers is more realistic?
 
 Speed Optimization:
 - Time to find efficiency and complexity of each step & optimize
