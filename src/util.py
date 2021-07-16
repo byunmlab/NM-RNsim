@@ -480,11 +480,7 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     xi = jnp.array(xL)
     toc(times, "Lcg")
   elif isinstance(xi, str):
-    assert xi[0] == "L"
-    xi_parts = xi.split("_") 
-    N = int(xi_parts[2])
-    ximethod = xi_parts[1]
-    assert ximethod in NL_methods
+    assert xi[0] == "L", "483: Unknown xi option"
     # Get xi from the linear system, solving with cg
     L = L_from_A(A)
     vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
@@ -492,15 +488,21 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     xL = np.delete(xL, [ni_in, ni_out])
     xi = jnp.array(xL)
     toc(times, "Lcg")
-    # Make N simpler versions of the system to solve
-    for i in range(N):
-      wi = w * ( (i+1)/(N+1) )**2
-      soli = NL_sol(A, wi, v_in, ni_in, ni_out, xi=xi, method=ximethod, 
-        opt={"ftol":5e-5})
-      #db_print(soli.__dict__)
-      xi = soli.x
-    print(503, "Done with presolving")
-    toc(times, f"xi presolving, method={ximethod}")
+    if xi != "Lcg":
+      # Presolving with smaller w. Format: "L_method_N"
+      xi_parts = xi.split("_") 
+      N = int(xi_parts[2])
+      ximethod = xi_parts[1]
+      assert ximethod in NL_methods
+      # Make N simpler versions of the system to solve
+      for i in range(N):
+        wi = w * ( (i+1)/(N+1) )**2
+        soli = NL_sol(A, wi, v_in, ni_in, ni_out, xi=xi, method=ximethod, 
+          opt={"ftol":5e-5})
+        #db_print(soli.__dict__)
+        xi = soli.x
+      print(503, "Done with presolving")
+      toc(times, f"xi presolving, method={ximethod}")
   else:
     xi = jnp.array(xi)
   if hasattr(A, "toarray"):
@@ -533,10 +535,12 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     stol = opt["xtol"] if "xtol" in opt else 1e-4
     # List of solvers and tolerances
     methods = [
+      ("trf", .01),
+      ("custom", stol)]
       #("Lcg", 1e-7),
       #("hybr", ltol),
-      ("trf", 10*stol),
-      ("hybr", stol)]#,
+      #("trf", 10*stol),
+      #("hybr", stol)]#,
       #("trf", stol),
       #("n-k", stol)]
     sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=stol, opt=opt)
@@ -545,10 +549,10 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   elif method == "custom":
     options = {
       "maxit": 400,
-      "xtol": 1e-10,
+      "xtol": opt["xtol"] if "xtol" in opt else 1e-10,
       "rtol": opt["ftol"] if "ftol" in opt else 1e-4,
       "leash": 8,
-      "momentum": 0.5
+      "momentum": 0.1
     }
     sol = NL_custom_N(res, jac, xi, options)
     toc(times, f"Custom Newton solver (w={w})")
@@ -605,36 +609,20 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       opt["xtol"] = 1e-6
     if "gtol" not in opt:
       opt["gtol"] = 1e-10
-    #last_x = None
-    #last_res = None
-    #last_jac = None
-    # These functions only recalculate if needed
-    # This mimics how the spo.root function handels jac=True
-    #def res(x):
-    #  nonlocal last_res
-    #  nonlocal last_jac
-    #  nonlocal last_x
-    #  if not np.all(x == last_x):
-    #    last_res, last_jac = res_jac(x)
-    #    last_x = x
-    #  return last_res
-    #def jac(x):
-    #  nonlocal last_res
-    #  nonlocal last_jac
-    #  nonlocal last_x
-    #  if not np.all(x == last_x):
-    #    last_res, last_jac = res_jac(x)
-    #    last_x = x
-    #  return last_jac
     xi = xi.flatten()
     sol = spo.least_squares(res, xi, jac=jac, method="trf", **opt)
 
+  rxf = res(sol.x)
+  db_print(f"||res(xf)||: {jnp.linalg.norm(rxf)}")
   toc(times, "NL_sol", total=True)
   return sol
 
 def NL_custom_N(res, jac, xi, options):
   """Custom solver, using a modified version of Newton's method
   """
+  # Deal with generic tol
+  if "tol" in options:
+    options["xtol"] = options["tol"]
   err = 1
   rtol = options["rtol"] if "rtol" in options else 1e-4
   nstep = 1
@@ -708,9 +696,12 @@ def NL_custom_N(res, jac, xi, options):
   sol.fun = rm
   sol.err = errm
   sol.it = it
+  sol.message = "MESSAGE STUB" # TMP
+  sol.nfev = nfev
+  sol.success = True # TMP
   return sol
 
-def NL_mlt(A, L, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
+def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
   """More convenient interface for NL_sol(method="mlt")
   Parameters
   ----------
@@ -831,8 +822,11 @@ def NL_mlt(A, L, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
       rxi = rx1
       xi = sol.x
       # Note: this doesn't affect the final result...
-      xi[xi<0] = 0 # Keep xi within bounds
-      xi[xi>v_in] = v_in
+      # NOTE: This was bad. I can be > v_in
+      #xi[xi<0] = 0 # Keep xi within bounds
+      #xi[xi>v_in] = v_in
+      print(820, len(xi[xi<0]), "x < 0")
+      print(821, len(xi[xi>v_in]), "x > v_in")
   return sol
 
 def NL_Axb(A, b, w=1, xi=None, method="n-k", opt={}):

@@ -63,7 +63,7 @@ def res_sim(cp, rn):
     i0 = rn.node(p0)["isnk"]
     i1 = rn.node(p1)["isnk"]
     print(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
-    if abs(i0+i1) > 1e-5:
+    if abs(i0+i1) > 1e-4:
       print("Significant KCL error")
   else:
     # Calculate the Req

@@ -728,12 +728,12 @@ class ResistorNetwork:
       opt = {"verbose" : vrb,
         "xtol" : self.xtol}
       # OLD: v = util.NL_Axb(Adj, b, w=self.res_w, method=self.sol_method, opt=opt)
-      #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
-      #  method=self.sol_method, opt=opt)
+      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
+        method=self.sol_method, opt=opt)
       #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_custom_32",
       #  method=self.sol_method, opt=opt)
-      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_hybr_4",
-        method=self.sol_method, opt=opt)
+      #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_hybr_3",
+      #  method=self.sol_method, opt=opt)
       v = util.ainsrt(sol.x, [(n0i, v_in), (n1i, 0)])[0:-1]
       v = np.array(v, dtype=np.float) #Convert back to np
       I_in = sol.x[-1]
