@@ -26,11 +26,12 @@ import matplotlib.pyplot as plt
 
 import jax
 import jax.numpy as jnp
+import optax
 
 # List of strings (in lowercase) that are considered equivalent to True
 true_strs = ("true", "t", "yes", "y", "on", "1")
 # List of nonlinear solver methods
-NL_methods = ("n-k", "hybr", "trf", "mlt", "custom")
+NL_methods = ("n-k", "hybr", "trf", "mlt", "custom", "optax-adam")
 # Debugging boolean - to be set from cp.getboolean("exec", "debug")
 debug = False
 timing = False
@@ -546,6 +547,22 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=stol, opt=opt)
     return sol
 
+  elif method == "optax-adam":
+    # Scalar conversion
+    loss = lambda x,A,w,v_in,ni_in,ni_out: jnp.sum(jnp.square(NL_res_j(x, A,
+      w, v_in, ni_in, ni_out)))
+    jloss = jax.jit(loss, static_argnums=[2,3,4,5])
+    jgrad = jax.jit(jax.grad(loss, 0), static_argnums=[2,3,4,5])
+    jlx = lambda x: jloss(x,A,w,v_in,ni_in,ni_out) #"jlx" = Jitted Loss (x)
+    jgx = lambda x: jgrad(x,A,w,v_in,ni_in,ni_out)
+    # Parameters
+    options = {
+      "lrn_rate": 1e-3,
+      "maxit": 4000
+    }
+    sol = NL_adam(jlx, jgx, xi, options)
+    toc(times, f"Optax Adam solver (w={w})")
+
   elif method == "custom":
     options = {
       "maxit": 400,
@@ -615,6 +632,36 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   rxf = res(sol.x)
   db_print(f"||res(xf)||: {jnp.linalg.norm(rxf)}")
   toc(times, "NL_sol", total=True)
+  return sol
+
+def NL_adam(jlx, jgx, xi, options):
+  """Adam solver from optax
+  """
+  # Set up optax
+  params = {'x': xi}
+  opt = optax.adam(options["lrn_rate"])
+  state = opt.init(params)
+
+  # Optimize
+  it = 0
+  while it < options["maxit"]:
+    if it%10 == 0:
+      rx = jlx(params['x'])
+      gx = jgx(params['x'])
+      #print(f"Iteration {it}: x[-5:]={params['x'][-5:]}, loss={rx}")
+      print(f"Iteration {it};\tloss={rx:.6f};\tmax(grad)={jnp.max(gx):.6f}")
+    grads = {'x': jgx(params['x'])}
+    updates, state = opt.update(grads, state)
+    params = optax.apply_updates(params, updates)
+    it += 1
+
+  def sol(): pass
+  sol.x = params['x']
+  sol.loss = jlx(sol.x)
+  sol.grad = jgx(sol.x)
+  sol.it = it
+  sol.message = "MESSAGE STUB" # TMP
+  sol.success = True # TMP
   return sol
 
 def NL_custom_N(res, jac, xi, options):
