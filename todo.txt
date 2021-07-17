@@ -2,7 +2,7 @@ CURRENT TO DO:
 1. Do some more tweaking of the solver till I'm happy enough with it
  - Maybe try 2nd order optax things?
  - (LATER) Figure out how to use sparse matrices in jax
- - Try scipy basinhopping & compare to TRF & HYBR
+* - Try scipy basinhopping & compare to TRF & HYBR
  - Make adaptive method that tries HYBR first, then TRF if there's KCL error, high ||res||, or I != i_in & i_out.
 2. Huge DOE with all the parameters in a small network
 3. Try RELU activation (random diodes)

@@ -7,8 +7,10 @@ os.environ["OMP_NUM_THREADS"] = threads
 os.environ["MKL_NUM_THREADS"] = threads
 os.environ["VECLIB_MAXIMUM_THREADS"] = threads
 os.environ["NUMEXPR_NUM_THREADS"] = threads
-#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".05"
+# jax options
+os.environ["JAX_ENABLE_X64"] = "True"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
+#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".05"
 
 # Standard modules
 from argparse import ArgumentParser as ArPr

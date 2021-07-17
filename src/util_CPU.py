@@ -24,10 +24,6 @@ import scipy.sparse.linalg as spsl
 import scipy.optimize as spo # N-K
 import matplotlib.pyplot as plt
 
-import jax
-import jax.numpy as jnp
-import optax
-
 # List of strings (in lowercase) that are considered equivalent to True
 true_strs = ("true", "t", "yes", "y", "on", "1")
 # List of nonlinear solver methods
@@ -73,10 +69,10 @@ def ainsrt2(x, i0, v0, i1, v1):
   Like ainsrt, but specifically for inserting 2 values and compatible with jit.
   """
   N = x.size+2
-  x01 = jnp.concatenate([ x[0:i0], v0, x[i0:i1-1], v1, x[i1-1:] ], axis=None)[0:N]
-  x10 = jnp.concatenate([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ], axis=None)[0:N]
+  x01 = np.concatenate([ x[0:i0], v0, x[i0:i1-1], v1, x[i1-1:] ], axis=None)[0:N]
+  x10 = np.concatenate([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ], axis=None)[0:N]
   # Essentially it's an if statement here
-  return jnp.where(i0 < i1, x01, x10)
+  return np.where(i0 < i1, x01, x10)
 
 def db_print(s):
   """Wrapper for standard print()
@@ -316,7 +312,7 @@ def parabola_opt(fx0, fx1, fx2):
   """
   xc = (3*fx0 - 4*fx1 + fx2) / (2*fx0 - 4*fx1 + 2*fx2)
   #print(316, fx0, fx1, fx2, xc)
-  if jnp.isnan(xc):
+  if np.isnan(xc):
     return 1
   eps = 1e-6
   return max(min(xc, 2-eps), eps)
@@ -377,13 +373,30 @@ def NL_res_j(x, A, w, v_in, ni_in, ni_out):
   """
   N = x.size + 2
   v = ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
-  vcols, vrows = jnp.meshgrid(v, v)
+  vcols, vrows = np.meshgrid(v, v)
   sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-  Asinh = jnp.multiply(A, jnp.sinh(sinharg))
+  Asinh = np.multiply(A, np.sinh(sinharg))
   sumI = Asinh.sum(1) / w # sum of currents leaving each node
-  res = sumI.at[ni_in].add(- x[-1])
-  res = res.at[ni_out].add(x[-1])
-  return res#[1:] # Throw one equation out
+  res = sumI
+  res[ni_in] -= x[-1]
+  res[ni_out] += x[-1]
+  return res
+def NL_jac_j(x, A, w, v_in, ni_in, ni_out):
+  N = x.size + 2
+  v = ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
+  vcols, vrows = np.meshgrid(v, v)
+  sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
+  Acosh = np.multiply(A, np.cosh(sinharg))
+  KCLJ = np.diag(Acosh.sum(1)) - Acosh
+  # Add a column for the I variable (x[-1])
+  IO_is = np.zeros((len(v), 1))
+  IO_is[ni_in] = -1
+  IO_is[ni_out] = 1
+  J = np.concatenate((KCLJ, IO_is), axis=1)
+  #J = J[1:, :] # Throw out one KCL equation
+  # Delete the columns for v_in and v_out
+  J = np.delete(J, [ni_in, ni_out], axis=1)
+  return J
 def NL_res_old(A, w, v_in, ni_in, ni_out, x):
   # Find the residual from the nonlinear verson of KCL
   # Recover the voltage vector
@@ -471,14 +484,15 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     db_print(f"Starting Nonlinear Solver: {method}")
   N = A.shape[1]-1 # len(x) = N_nodes + 1 - 2
   if xi is None:
-    xi = jnp.zeros(N).at[ni_in].set(v_in)
+    xi = np.zeros(N)
+    xi[ni_in] = v_in
   elif xi == "Lcg":
     # Get xi from the linear system, solving with cg
     L = L_from_A(A)
     vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
     xL = np.append(vL, v_in / RL) # convert v to x
     xL = np.delete(xL, [ni_in, ni_out])
-    xi = jnp.array(xL)
+    xi = np.array(xL)
     toc(times, "Lcg")
   elif isinstance(xi, str):
     assert xi[0] == "L", "483: Unknown xi option"
@@ -487,7 +501,7 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
     xL = np.append(vL, v_in / RL) # convert v to x
     xL = np.delete(xL, [ni_in, ni_out])
-    xi = jnp.array(xL)
+    xi = np.array(xL)
     toc(times, "Lcg")
     if xi != "Lcg":
       # Presolving with smaller w. Format: "L_method_N"
@@ -505,25 +519,20 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       print(503, "Done with presolving")
       toc(times, f"xi presolving, method={ximethod}")
   else:
-    xi = jnp.array(xi)
+    xi = np.array(xi)
   if hasattr(A, "toarray"):
-    # Convert to jax array
-    A = jnp.array(A.toarray())
+    A = np.array(A.toarray())
   ubound = v_in * np.ones(N)
   ubound[-1] = np.inf # No bound on current
   bounds = (np.zeros(N)-1e-6, ubound+1e-6)
 
-  # Create jit compiled versions of the function
-  jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5])
-  res = lambda x: jres(x, A, w, v_in, ni_in, ni_out)
-  jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5])
-  jac = lambda x: jjac(x, A, w, v_in, ni_in, ni_out)
+  res = lambda x: NL_res_j(x, A, w, v_in, ni_in, ni_out)
+  jac = lambda x: NL_jac_j(x, A, w, v_in, ni_in, ni_out)
 
-  #toc(times, "jit")
   rxi = res(xi)
-  db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}")
+  db_print(f"||res(xi)||: {np.linalg.norm(rxi)}")
   toc(times, "res(xi)")
-  if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
+  if np.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
     # If xi is already within tolerance, we're done
     def sol(): pass
     sol.x = xi
@@ -546,22 +555,6 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       #("n-k", stol)]
     sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=stol, opt=opt)
     return sol
-
-  elif method == "optax-adam":
-    # Scalar conversion
-    loss = lambda x,A,w,v_in,ni_in,ni_out: jnp.sum(jnp.square(NL_res_j(x, A,
-      w, v_in, ni_in, ni_out)))
-    jloss = jax.jit(loss, static_argnums=[2,3,4,5])
-    jgrad = jax.jit(jax.grad(loss, 0), static_argnums=[2,3,4,5])
-    jlx = lambda x: jloss(x,A,w,v_in,ni_in,ni_out) #"jlx" = Jitted Loss (x)
-    jgx = lambda x: jgrad(x,A,w,v_in,ni_in,ni_out)
-    # Parameters
-    options = {
-      "lrn_rate": 1e-3,
-      "maxit": 4000
-    }
-    sol = NL_adam(jlx, jgx, xi, options)
-    toc(times, f"Optax Adam solver (w={w})")
 
   elif method == "custom":
     options = {
@@ -605,7 +598,7 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     #sol = spo.root(res_jac, xi, method="hybr", jac=True, options=hopt)
     sol = spo.root(res, xi, method="hybr", jac=jac, options=hopt)
     toc(times, f"hybr (w={w})")
-    #db_print(f"||res(sol.x)||: {jnp.linalg.norm(res(sol.x))}")
+    #db_print(f"||res(sol.x)||: {np.linalg.norm(res(sol.x))}")
     #toc(times, "res(sol.x)")
   elif method == "trf":
     #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
@@ -615,11 +608,11 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     opt["bounds"] = bounds
     # Make sure xi is feasible
     print(617, len(xi[xi<0]))
-    xi = xi.at[xi<0].set(0)
+    xi[xi<0] = 0
     print(619, len(xi[xi>v_in]))
     Ii = xi[-1]
-    xi = xi.at[xi>v_in].set(v_in)
-    xi = xi.at[-1].set(Ii) # x[-1] has no upper bound
+    xi[xi>v_in] = v_in
+    xi[-1] = Ii
     # Scale the variable for current so it's more significant
     opt["x_scale"] = "jac" # IDK about this...
     #opt["x_scale"] = np.ones(N)
@@ -637,38 +630,8 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     sol = spo.least_squares(res, xi, jac=jac, method="trf", **opt)
 
   rxf = res(sol.x)
-  db_print(f"||res(xf)||: {jnp.linalg.norm(rxf)}")
+  db_print(f"||res(xf)||: {np.linalg.norm(rxf)}")
   toc(times, "NL_sol", total=True)
-  return sol
-
-def NL_adam(jlx, jgx, xi, options):
-  """Adam solver from optax
-  """
-  # Set up optax
-  params = {'x': xi}
-  opt = optax.adam(options["lrn_rate"])
-  state = opt.init(params)
-
-  # Optimize
-  it = 0
-  while it < options["maxit"]:
-    if it%10 == 0:
-      rx = jlx(params['x'])
-      gx = jgx(params['x'])
-      #print(f"Iteration {it}: x[-5:]={params['x'][-5:]}, loss={rx}")
-      print(f"Iteration {it};\tloss={rx:.6f};\tmax(grad)={jnp.max(gx):.6f}")
-    grads = {'x': jgx(params['x'])}
-    updates, state = opt.update(grads, state)
-    params = optax.apply_updates(params, updates)
-    it += 1
-
-  def sol(): pass
-  sol.x = params['x']
-  sol.loss = jlx(sol.x)
-  sol.grad = jgx(sol.x)
-  sol.it = it
-  sol.message = "MESSAGE STUB" # TMP
-  sol.success = True # TMP
   return sol
 
 def NL_custom_N(res, jac, xi, options):
@@ -687,21 +650,21 @@ def NL_custom_N(res, jac, xi, options):
   nfev = 0
   it = 0
   maxit = options["maxit"] if "maxit" in options else 500
-  fnorm = lambda x: jnp.linalg.norm(res(x))
+  fnorm = lambda x: np.linalg.norm(res(x))
   # This makes the newton steps more like acceleration than velocity
   momentum = options["momentum"] if "momentum" in options else 0.2
-  laststep = jnp.zeros(xi.shape)
+  laststep = np.zeros(xi.shape)
   x1 = xi
   r1 = res(x1)
-  err = jnp.linalg.norm(r1)
+  err = np.linalg.norm(r1)
   itsince = 0
   xm_used = False # Has this xm already been reset back to?
   xm = x1 # x_min - best x so far
   rm = r1
-  errm = jnp.linalg.norm(rm)
+  errm = np.linalg.norm(rm)
   while(it < maxit and err > rtol and nstep_2avg > xtol):
     J1 = jac(x1)
-    step, *_ = jnp.linalg.lstsq(J1, -r1)
+    step, *_ = np.linalg.lstsq(J1, -r1)
     # Find the best step along that line
     step_mlt, lm_fev = line_min(fnorm, x1, err, step) # Simple 1D optimization
     print(536, step_mlt, lm_fev)
@@ -712,7 +675,7 @@ def NL_custom_N(res, jac, xi, options):
     x1 = x1 + step
     r1 = res(x1)
     nfev += 1
-    err = jnp.linalg.norm(r1)
+    err = np.linalg.norm(r1)
     if err < errm:
       xm = x1
       rm = r1
@@ -731,18 +694,18 @@ def NL_custom_N(res, jac, xi, options):
         x1 = xm
         r1 = rm
         err = errm
-        laststep = jnp.zeros(xi.shape)
+        laststep = np.zeros(xi.shape)
         itsince = 0
         xm_used = True
         db_print("Reset back to x_min")
 
     it += 1
     last_nstep = nstep
-    nstep = jnp.linalg.norm(step)
+    nstep = np.linalg.norm(step)
     # Use a running average to allow occasional tiny steps
     nstep_2avg = (nstep + last_nstep) / 2
-    #dJ = jnp.linalg.det(J1)
-    nJs = jnp.linalg.norm( jnp.dot(J1, step) )
+    #dJ = np.linalg.det(J1)
+    nJs = np.linalg.norm( np.dot(J1, step) )
     db_print(f"At it#{it}/{maxit}, err={err}, ||step||={nstep},"# |J|={dJ},"
       f" ||J*step||={nJs}")
   def sol(): pass
@@ -771,6 +734,73 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
   Returns
   -------
     sol (OptimizeResult) : the solver result
+  """
+
+  """ OLD CODE, used to be in NL_sol
+  # Chain multiple solvers
+  final_xtol = opt["xtol"] if "xtol" in opt else 1e-5
+  rxi = np.linalg.norm(NL_res(A, w, v_in, ni_in, ni_out, xi))
+  # Round 0: cg (linear version of system)
+  L = L_from_A(A) #Laplacian
+  v1, R1, status = L_sol(L, v_in, ni_in, ni_out, atol=1e-3)
+  if status == 0:
+    x1 = np.append(v1, v_in / R1)
+    x1 = np.delete(x1, [ni_in, ni_out])
+    #print(397, v1[-10:], x1[-10:])
+    rx1 = np.linalg.norm(NL_res(A, w, v_in, ni_in, ni_out, x1))
+    print(393, rxi, rx1)#xi[-20:], x1[-20:], rxi, rx1)
+    if rx1 < rxi:
+      xi = x1
+      rxi = rx1
+  # Round 1: large tol hybr
+  opt["xtol"] = 1e-3
+  sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method="hybr", opt=opt)
+  #print(400, xi[-20:], sol.x[-20:])
+  print(401, sol.message, sol.nfev, rxi, np.linalg.norm(sol.fun))
+  if sol.success and (np.linalg.norm(sol.fun) < final_xtol):
+    return sol
+  rx1 = np.linalg.norm(sol.fun) # sol.fun is NL_res(sol.x)
+  if rx1 < rxi:
+    xi = sol.x
+    rxi = rx1
+  # Round 2: large tol trf
+  opt["xtol"] = 1e-4
+  xi[xi<0] = 0 # Keep xi within bounds
+  xi[xi>v_in] = v_in
+  sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method="trf", opt=opt)
+  print(420, sol.message, sol.nfev, rxi, np.linalg.norm(sol.fun))
+  if sol.success and (np.linalg.norm(sol.fun) < final_xtol):
+    return sol
+  rx1 = np.linalg.norm(sol.fun)
+  if rx1 < rxi:
+    xi = sol.x
+    rxi = rx1
+  # Round 3: small tol hybr
+  opt["xtol"] = final_xtol
+  sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method="hybr", opt=opt)
+  print(413, sol.message, sol.nfev, rxi, np.linalg.norm(sol.fun))
+  if sol.success:
+    return sol
+  rx1 = np.linalg.norm(sol.fun)
+  #print(405, rxi, rx1)
+  if rx1 < rxi:
+    xi = sol.x
+    rxi = rx1
+  # Round 4: small tol trf
+  xi[xi<0] = 0 # Keep xi within bounds
+  xi[xi>v_in] = v_in
+  sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method="trf", opt=opt)
+  print(426, sol.message, sol.nfev, rxi, np.linalg.norm(sol.fun))
+  if sol.success:
+    return sol
+  rx1 = np.linalg.norm(sol.fun)
+  if rx1 < rxi:
+    xi = sol.x
+    rxi = rx1
+  # Round 5: n-k
+  sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method="n-k", opt=opt)
+  print(435, sol.message, sol.nfev, rxi, np.linalg.norm(sol.fun))
+  return sol
   """
 
   # Initial r
