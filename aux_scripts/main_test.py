@@ -10,6 +10,7 @@ os.environ["OMP_NUM_THREADS"] = threads
 os.environ["MKL_NUM_THREADS"] = threads
 os.environ["VECLIB_MAXIMUM_THREADS"] = threads
 os.environ["NUMEXPR_NUM_THREADS"] = threads
+#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".05"
 
 # Standard modules
 from argparse import ArgumentParser as ArPr
@@ -163,13 +164,20 @@ def main():
   # Now do something with that rn
   util.db_print(f"RN size: {rn.size()}")
   util.db_print(f"RN edges: {rn.G.number_of_edges()}")
-  (p_max_e, e_p_max), (p_max_n, n_p_max), Req = rn.apply_v(1, "in0", "out0")
+  (p_max_e, e_p_max), (p_max_n, n_p_max), Req = rn.apply_v(1, "in0", "out0",
+    set_i=True)
+  i0 = rn.node("in0")["isnk"]
+  i1 = rn.node("out0")["isnk"]
+  print(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
+  if abs(i0+i1) > 1e-4:
+    print("Significant KCL error")
+
   #print(167, p_max_e, e_p_max)
-  mpe = rn.get_maxp_edges(2)
-  print(168, mpe)
-  rn.edge_burn(1)
-  mpe = rn.get_maxp_edges(2)
-  print(172, mpe)
+  #mpe = rn.get_maxp_edges(2)
+  #print(168, mpe)
+  #rn.edge_burn(1)
+  #mpe = rn.get_maxp_edges(2)
+  #print(172, mpe)
   
   util.toc(times, "Total run", total=True)
 

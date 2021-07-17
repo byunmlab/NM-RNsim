@@ -613,6 +613,13 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     #   Instead, expand opt like this: **opt
     #   "verbose" is an option in least_squares {0,1,2}
     opt["bounds"] = bounds
+    # Make sure xi is feasible
+    print(617, len(xi[xi<0]))
+    xi = xi.at[xi<0].set(0)
+    print(619, len(xi[xi>v_in]))
+    Ii = xi[-1]
+    xi = xi.at[xi>v_in].set(v_in)
+    xi = xi.at[-1].set(Ii) # x[-1] has no upper bound
     # Scale the variable for current so it's more significant
     opt["x_scale"] = "jac" # IDK about this...
     #opt["x_scale"] = np.ones(N)
