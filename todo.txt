@@ -1,18 +1,19 @@
 CURRENT TO DO:
-- Migrate to jax + optax
-	- Maybe try 2nd order optax things?
-	- Figure out how to use sparse matrices in jax
-- Try scipy basinhopping & compare to TRF & HYBR
-- Start other T3k sims and compare
-- Make adaptive method that tries HYBR first, then TRF if there's KCL error.
+1. Do some more tweaking of the solver till I'm happy enough with it
+ - Maybe try 2nd order optax things?
+ - (LATER) Figure out how to use sparse matrices in jax
+ - Try scipy basinhopping & compare to TRF & HYBR
+ - Make adaptive method that tries HYBR first, then TRF if there's KCL error, high ||res||, or I != i_in & i_out.
+2. Huge DOE with all the parameters in a small network
+3. Try RELU activation (random diodes)
 
 IN PROGRESS:
-- 116_1r1164 - Compare MLT(HYBR) & GPU & TRF & MLT2 (corrected MLT)
-- 116 : Try again, varying burn aggressiveness
 - 117 : Repeat 116 with edges instead of fibers. Hopefully we should be able to see which works better.
 - 116_E : Repeat 116 with edges instead of fibers. This time with the same rands.
 
 RECENTLY DONE:
+- 116_1r1164 - Compare MLT(HYBR) & GPU & TRF & MLT2 (corrected MLT)
+- 116 : Try again, varying burn aggressiveness
 - Try burning edges instead of fibers (rn.edge_burn)
 - See which methods work will with a tiny RN, like N=16. Look for patterns.
 - 115: Smaller network with longer fibers, trying to make XOR
