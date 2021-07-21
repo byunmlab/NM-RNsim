@@ -370,6 +370,14 @@ def NL_P(G, w, v):
   i = NL_I(G, w, v)
   return v*i
 
+def sum_node_I(v, A, w, ni):
+  """Like RN.sum_currents, return the current sinked by the given node
+  The difference is that this operates with the adjacency matrix.
+  """
+  dv = v[ni] - v
+  i_in = - NL_I(A[ni,:], w, dv)
+  return jnp.sum(i_in)
+
 # These calculate the residuals for a given x vector in the NL system
 def NL_res_j(x, A, w, v_in, ni_in, ni_out):
   """NL_res, but compatible with jit.
@@ -533,18 +541,24 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   if method == "mlt":
     # Chain multiple solvers
     #ltol = 5e-3
-    stol = opt["xtol"] if "xtol" in opt else 1e-4
+    xtol = opt["xtol"] if "xtol" in opt else 1e-5
+    ftol = opt["ftol"] if "ftol" in opt else 1e-3
     # List of solvers and tolerances
     methods = [
-      ("trf", .01),
-      ("custom", stol)]
+      #("hybr", xtol*10),
+      ("hybr", xtol*100),
+      ("hybr", xtol),
+      ("trf", xtol/16),
+      ("trf", xtol/256),
+      ("trf", xtol/4096)]
+      #("custom", stol)]
       #("Lcg", 1e-7),
       #("hybr", ltol),
       #("trf", 10*stol),
       #("hybr", stol)]#,
       #("trf", stol),
       #("n-k", stol)]
-    sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=stol, opt=opt)
+    sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=ftol, opt=opt)
     return sol
 
   elif method == "optax-adam":
@@ -610,9 +624,25 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   elif method == "trf":
     #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
     # The least_squares method doesn't take an options argument.
-    #   Instead, expand opt like this: **opt
+    #   Instead, expand options like this: **trf_opt
     #   "verbose" is an option in least_squares {0,1,2}
-    opt["bounds"] = bounds
+    trf_opt = {
+      "bounds": bounds,
+      "x_scale": "jac" # IDK about this...
+    }
+    # Scale the variable for current so it's more significant
+    #opt["x_scale"] = np.ones(N)
+    #opt["x_scale"] = N/10
+    trf_opt["verbose"] = opt["verbose"] if "verbose" in opt else 0
+    if "tol" in opt:
+      trf_opt["xtol"] = opt["tol"]
+    if "xtol" not in trf_opt:
+      trf_opt["xtol"] = 1e-6
+    # This ftol refers to SSR cost, not ||res||
+    # Actually, it's relative (dF / F), not absolute cost
+    trf_opt["ftol"] = opt["ftol"] if "ftol" in opt else 1e-3
+    trf_opt["ftol"] = .5 * trf_opt["ftol"]**2 * 10 # *10 arbitrary
+    trf_opt["gtol"] = opt["gtol"] if "gtol" in opt else 1e-10
     # Make sure xi is feasible
     print(617, len(xi[xi<0]))
     xi = xi.at[xi<0].set(0)
@@ -620,21 +650,8 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     Ii = xi[-1]
     xi = xi.at[xi>v_in].set(v_in)
     xi = xi.at[-1].set(Ii) # x[-1] has no upper bound
-    # Scale the variable for current so it's more significant
-    opt["x_scale"] = "jac" # IDK about this...
-    #opt["x_scale"] = np.ones(N)
-    #opt["x_scale"] = N/10
-    if "tol" in opt:
-      opt["xtol"] = opt["tol"]
-      del(opt["tol"])
-    if "ftol" not in opt:
-      opt["ftol"] = 1e-6
-    if "xtol" not in opt:
-      opt["xtol"] = 1e-6
-    if "gtol" not in opt:
-      opt["gtol"] = 1e-10
     xi = xi.flatten()
-    sol = spo.least_squares(res, xi, jac=jac, method="trf", **opt)
+    sol = spo.least_squares(res, xi, jac=jac, method="trf", **trf_opt)
 
   rxf = res(sol.x)
   db_print(f"||res(xf)||: {jnp.linalg.norm(rxf)}")
@@ -755,6 +772,44 @@ def NL_custom_N(res, jac, xi, options):
   sol.success = True # TMP
   return sol
 
+def NL_adpt(A, w, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
+  """Adaptive method that keeps trying more careful solvers until
+  it reaches ftol. Also considers KCL error.
+    The following two values must be < ftol
+      - ||res||
+      - ptp(i_out, i_in, x[-1]) -- This represents KCL error as well as how
+        accurate the current variable x[-1] is
+  NOT FINISHED, NOT USED. I'll probably stick with NL_mlt
+  """
+
+  if rxi is None:
+    # Initial r
+    rxi = np.linalg.norm(NL_res_j(xi, A, w, v_in, ni_in, ni_out))
+  method = "hybr" # Fastest, but less reliable sometimes
+  tol = 10*ftol
+  opt["tol"] = tol
+  while True:
+    if opt["verbose"]:
+      print(783, f"Running method {method} with tol={tol}")
+    sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=method, opt=opt)
+    if opt["verbose"]:
+      print(582, sol.message, sol.nfev)#, sol.x[-8:])
+    # See if sol is an improvement and if it's good enough alredy
+    if not sol.success:
+      print("Warning: the solver did not converge")
+      # I may still want to use the result if it's better than before
+    #if sol.success:
+    rx1 = np.linalg.norm(sol.fun)
+    if opt["verbose"]:
+      print(f"ADPT step: Previous r={rxi:.8f}. New r={rx1:.8f}")
+    if rx1 < ftol: #sol.x is already good enough
+      return sol
+    if rx1 < rxi: #sol.x is better than the previous xi
+      rxi = rx1
+      xi = sol.x
+  # NOT FINISHED
+  return sol
+
 def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
   """More convenient interface for NL_sol(method="mlt")
   Parameters
@@ -790,6 +845,7 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
     #  sol.fun = NL_res_j(x1, A, w, v_in, ni_in, ni_out)
     if mtd in NL_methods:
       opt["tol"] = tol
+      #opt["ftol"] = ftol
       sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=mtd, opt=opt)
     else:
       print("Error: Unknown method")
@@ -797,23 +853,24 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
       print(582, sol.message, sol.nfev)#, sol.x[-8:])
     # See if sol is an improvement and if it's good enough alredy
     if not sol.success:
-      print("Warning: the solver did not converge")
       # I may still want to use the result if it's better than before
-    #if sol.success:
-    rx1 = np.linalg.norm(sol.fun)
-    if opt["verbose"]:
-      print(587, f"Previous r={rxi:.8f}. New r={rx1:.8f}")
-    if rx1 < ftol: #sol.x is already good enough
-      return sol
-    if rx1 < rxi: #sol.x is better than the previous xi
-      rxi = rx1
-      xi = sol.x
-      # Note: this doesn't affect the final result...
-      # NOTE: This was bad. I can be > v_in
-      #xi[xi<0] = 0 # Keep xi within bounds
-      #xi[xi>v_in] = v_in
-      print(820, len(xi[xi<0]), "x < 0")
-      print(821, len(xi[xi>v_in]), "x > v_in")
+      # However, when you start from a bad starting place, it's worse.
+      print("Warning: the solver did not converge")
+    if sol.success:
+      rx1 = jnp.linalg.norm(sol.fun)
+      v = ainsrt2(sol.x, ni_in, v_in, ni_out, 0)[0:-1]
+      i_in = - sum_node_I(v, A, w, ni_in)
+      i_out = sum_node_I(v, A, w, ni_out)
+      KCL_err = jnp.ptp(jnp.array( (i_in, i_out, sol.x[-1]) ))
+      print(854, i_in, i_out, sol.x[-1], rx1)
+      err = max(KCL_err, rx1)
+      if opt["verbose"]:
+        print(f"MLT step: Previous err={rxi:.8f}. New err={err:.8f}")
+      if err < ftol: #sol.x is already good enough
+        return sol
+      if err < rxi: #sol.x is better than the previous xi
+        rxi = err
+        xi = sol.x
   return sol
 
 def NL_Axb(A, b, w=1, xi=None, method="n-k", opt={}):

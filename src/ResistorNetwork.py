@@ -35,6 +35,7 @@ class ResistorNetwork:
   sol_method = "cg"
   # Stopping tolerance in x for nonlinear solvers.
   xtol = 1e-3
+  ftol = 1e-3
 
   # Training options
   fpV = .5 # Fwd pass voltage for training
@@ -170,6 +171,7 @@ class ResistorNetwork:
     cls.sol_method = cp.get("RN-res", "sol_method")
     cls.res_w = cp.getfloat("RN-res", "res_w")
     cls.xtol = cp.getfloat("RN-res", "xtol")
+    cls.ftol = cp.getfloat("RN-res", "ftol")
     # Load the plotting options
     cls.plt_node_size = cp.getfloat("plot", "node_size")
     cls.plt_ln_width = cp.getfloat("plot", "ln_width")
@@ -726,7 +728,8 @@ class ResistorNetwork:
       # TODO: Keep track of if it succeeded or not.
       vrb = 2#TMP
       opt = {"verbose" : vrb,
-        "xtol" : self.xtol}
+        "xtol" : self.xtol,
+        "ftol" : self.ftol}
       # OLD: v = util.NL_Axb(Adj, b, w=self.res_w, method=self.sol_method, opt=opt)
       sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
         method=self.sol_method, opt=opt)
