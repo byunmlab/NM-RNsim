@@ -517,11 +517,13 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
     xL = np.append(vL, v_in / RL) # convert v to x
     xL = np.delete(xL, [ni_in, ni_out])
-    xi = np.array(xL)
     toc(times, "Lcg")
-    if xi != "Lcg":
+    if xi == "Lcg":
+      xi = jnp.array(xL)
+    else:
       # Presolving with smaller w. Format: "L_method_N"
       xi_parts = xi.split("_") 
+      xi = jnp.array(xL)
       N = int(xi_parts[2])
       ximethod = xi_parts[1]
       assert ximethod in NL_methods
