@@ -726,7 +726,7 @@ class ResistorNetwork:
         nodelist=self.node_list)
       # TODO: Also use the other paremeters for the N-K method.
       # TODO: Keep track of if it succeeded or not.
-      vrb = 2#TMP
+      vrb = 1#TMP
       opt = {"verbose" : vrb,
         "xtol" : self.xtol,
         "ftol" : self.ftol}
