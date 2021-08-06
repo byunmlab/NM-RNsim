@@ -1,17 +1,19 @@
 CURRENT TO DO:
 1. Do some more tweaking of the solver till I'm happy enough with it
- - A little more speed testing of CPU vs GPU with the MLT solver. Also with different voltages.
- - Maybe try 2nd order optax things?
- - (LATER) Figure out how to use sparse matrices in jax
- - Make adaptive method that tries HYBR first, then TRF if there's KCL error, high ||res||, or I != i_in & i_out.
+  - A little more speed testing of CPU vs GPU with the MLT solver. Also with different voltages.
+  - Maybe try 2nd order optax things?
+  - (LATER) Figure out how to use sparse matrices in jax
 2. See if I can run 50 at once on a GPU
 3. Huge DOE with all the parameters in a small network
 4. Try RELU activation (random diodes)
 
 IN PROGRESS:
+- Work on multiprocessing with mp.Pool
+  --> Next: How to pipe output to separate log files
 
 RECENTLY DONE:
 - Tweak the NL_mlt method so it considers KCL error. I'm decently happy with it now.
+  - Make adaptive method that tries HYBR first, then TRF if there's KCL error, high ||res||, or I != i_in & i_out.
 - Try shgo -- >5hr with no results. Granted, it was sharing resources on the GPU for part of that time.
 - Try dual_annealing -- 1.5hrs to get a result.
 - Try basinhopping -- Not working well

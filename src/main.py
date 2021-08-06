@@ -10,7 +10,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = threads
 # jax options
 os.environ["JAX_ENABLE_X64"] = "True"
 #os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".05"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".010"
 
 # Standard modules
 from argparse import ArgumentParser as ArPr
@@ -21,11 +21,12 @@ from ResistorNetwork import ResistorNetwork as RN
 from std_sims import run_sim
 import util
 
-def prep_options():
+def prep_options(options_dict):
   """Prepare the options object by loading all options from file and CLI args
     1. Set up ArgumentParser and interpret tha arguments
     2. Set up ConfigParser and load the options from file
     3. Perform any needed adjustments to the options object
+    4. Override anything from options_dict
   """
   # The command-line arguments should supercede the config file in useful
   #   ways that make it unnecessary to have 10 config files for 10 simulations
@@ -57,7 +58,7 @@ def prep_options():
   else:
     print("The config file must have the '.ini' extension")
   cp.read(cp.config_file)
-  alter_cp(cp, args)
+  alter_cp(cp, args, options_dict)
   
   # Set the debugging variable in util
   util.debug = cp.getboolean("exec", "debug")
@@ -66,7 +67,7 @@ def prep_options():
   
   return cp
 
-def alter_cp(cp, args):
+def alter_cp(cp, args, options_dict):
   """Take the loaded cp object and modify it so it's ready to be used
     1. Change anything that is being overridden by the CLI args
     2. Save a couple of things as attributes of the cp object so they're
@@ -74,7 +75,7 @@ def alter_cp(cp, args):
       - sim_id
       - save_format
   """
-  # Modify cp to override things that should be overridden
+  # Modify cp to override things that should be overridden from args
   if args.id is not None:
     cp.set("sim", "sim_id", args.id)
   if args.lRNf is not None:
@@ -103,6 +104,28 @@ def alter_cp(cp, args):
   if args.res_w is not None:
     cp.set("RN-res", "res_w", str(args.res_w))
 
+  # Add on the options from options_dict
+  if "id" in options_dict:
+    cp.set("sim", "sim_id", options_dict["id"])
+  if "rs" in options_dict:
+    cp.set("exec", "rand", options_dict["rs"])
+  #if "ks" in options_dict: # Instead, pass cnd_len
+  #  cnd_len = int( np.cbrt(V/N) / options_dict["ks"])
+  if "cnd_len" in options_dict:
+    cp.set("RN-fiber", "cnd_len", options_dict["cnd_len"])
+  if "fl_mus" in options_dict:
+    cp.set("RN-fiber", "fl_mus", options_dict["fl_mus"])
+  if "bpwr_mus" in options_dict:
+    cp.set("RN-fiber", "bpwr_mus", options_dict["bpwr_mus"])
+  if "ftype_proportions" in options_dict:
+    cp.set("RN-fiber", "ftype_proportions", 
+      options_dict["ftype_proportions"])
+  if "preburn_fraction" in options_dict:
+    cp.set("sim-train_set", "II_OO_preburn_fraction",
+      options_dict["preburn_fraction"])
+  if "burn_fibers" in options_dict:
+    cp.set("sim-train_set", "burn_fibers", options_dict["burn_fibers"])
+
   # ID of sim, to be appended to any files saved
   cp.sim_id = cp.get("sim", "sim_id")
   # Whether to use pickle or json format
@@ -111,7 +134,7 @@ def alter_cp(cp, args):
   if cp.save_format != "json":
     cp.save_format == "pickle"
 
-def main():
+def main(options={}):
   """
     1. Load all options
     2. Build the RN according to specifications
@@ -120,7 +143,7 @@ def main():
     - If specified, print the time required by each step along the way
   """
   # Prepare the configuration object
-  cp = prep_options()
+  cp = prep_options(options)
   # Startup Message
   util.db_print("Starting the Resistor Network Simulator")
   util.db_print(f"Using the configuration file {cp.config_file}")
