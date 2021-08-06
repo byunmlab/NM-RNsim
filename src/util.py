@@ -35,6 +35,9 @@ NL_methods = ("n-k", "hybr", "trf", "mlt", "custom", "optax-adam")
 # Debugging boolean - to be set from cp.getboolean("exec", "debug")
 debug = False
 timing = False
+# Options relevant to the sim log file
+log_fname = "log_TEMP.txt"
+use_stdout = False
 
 def str2arr(s):
   """Converts a comma-separated list of floats to a np.array.
@@ -78,12 +81,25 @@ def ainsrt2(x, i0, v0, i1, v1):
   # Essentially it's an if statement here
   return jnp.where(i0 < i1, x01, x10)
 
-def db_print(s):
-  """Wrapper for standard print()
-  Prints to screen if the "debug" setting is True
+def sim_log(*strings):
+  """Record s in the sim log file
+  """
+  with open(log_fname, "a") as log_file:
+    for s in strings:
+      log_file.write(str(s) + " ")
+    log_file.write("\n")
+
+def db_print(*strings):
+  """Custom wrapper / modification of the standard print()
+  If "debug" setting is True:
+    Prints to the sim log file
+    If use_stdout is True, also prints to the screen with print()
   """
   if debug:
-    print(s)
+    sim_log(*strings)
+    for s in strings:
+      if use_stdout:
+        print(s)
 
 def tic():
   """Start timing. Returns a list of times with one entry.
@@ -106,7 +122,7 @@ def toc(times, msg=None, total=False):
     times.append(time.time())
     if msg is not None:
       t = times[-1] - times[0] if total else times[-1] - times[-2]
-      print(msg, "time:", t)
+      sim_log(msg, "time:", t)
 
 def load_IO(IO_fname, npa=False):
   """Load the given IO csv file, checking for errors
@@ -119,10 +135,10 @@ def load_IO(IO_fname, npa=False):
       int(row["IN"], 2)
       int(row["OUT"], 2)
     except ValueError:
-      print("Please format N_in and N_out as binary")
+      sim_log("Please format N_in and N_out as binary")
       return None
     except KeyError:
-      print("Please include desired inputs and outputs")
+      sim_log("Please include desired inputs and outputs")
       return None
   if npa:
     return IO_df.to_numpy()
@@ -277,8 +293,8 @@ def min_LS_dist(p0, p1, v0, v1, dmaxt=None):
   CPt0 = (SSv1*dpdotv0 - v0dotv1*dpdotv1)/(SSv0*SSv1 - v0dotv1**2)
   CPt1 = (-SSv0*dpdotv1 + v0dotv1*dpdotv0)/(SSv0*SSv1 - v0dotv1**2)
   CPdist = dist_t0t1(CPt0, CPt1)
-  #print(f"p1: {p1}, v1: {v1}, CPt1: {CPt1}")
-  #print(f"p1 + v1*CPt1 = {p1 + v1*CPt1}, CPdist: {CPdist}")
+  #db_print(f"p1: {p1}, v1: {v1}, CPt1: {CPt1}")
+  #db_print(f"p1 + v1*CPt1 = {p1 + v1*CPt1}, CPdist: {CPdist}")
   CR_pts[0] = (CPt0, CPt1, CPdist)
   
   # Check all the 4 boundries of the unit square
@@ -297,7 +313,7 @@ def min_LS_dist(p0, p1, v0, v1, dmaxt=None):
   CR_pts[7] = (1, 0, dist_t0t1(1, 0))
   CR_pts[8] = (1, 1, dist_t0t1(1, 1))
   
-  #print(f"55: {CR_pts}")
+  #db_print(f"55: {CR_pts}")
   
   # Find the min, of the 9 critical points
   dmin = 1e6
@@ -315,7 +331,7 @@ def parabola_opt(fx0, fx1, fx2):
   (0, fx0), (1,fx1), (2,fx2)
   """
   xc = (3*fx0 - 4*fx1 + fx2) / (2*fx0 - 4*fx1 + 2*fx2)
-  #print(316, fx0, fx1, fx2, xc)
+  #db_print(316, fx0, fx1, fx2, xc)
   if jnp.isnan(xc):
     return 1
   eps = 1e-6
@@ -326,7 +342,7 @@ def line_min(f, x0, fx0, dx, mlt=1, fx2=None, nfev=0, fev_max=16):
   """
   fx1 = f(x0 + dx*mlt)
   nfev += 1
-  #print(323, fx0, fx1)
+  #db_print(323, fx0, fx1)
   if fx1 >= fx0:
     if nfev < fev_max:
       return line_min(f, x0, fx0, dx, mlt=.5*mlt, fx2=fx1, nfev=nfev)
@@ -346,7 +362,7 @@ def line_min(f, x0, fx0, dx, mlt=1, fx2=None, nfev=0, fev_max=16):
     #fn[i] =
     fn.append( f(x0 + dx*mlt*i) )
     nfev += 1
-    #print(337, fn[i])
+    #db_print(337, fn[i])
   # The optimum is between the last three values
   return (i-2 + parabola_opt(*fn[-3:]))*mlt, nfev
 
@@ -480,14 +496,6 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   N = A.shape[1]-1 # len(x) = N_nodes + 1 - 2
   if xi is None:
     xi = jnp.zeros(N).at[ni_in].set(v_in)
-  elif xi == "Lcg":
-    # Get xi from the linear system, solving with cg
-    L = L_from_A(A)
-    vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
-    xL = np.append(vL, v_in / RL) # convert v to x
-    xL = np.delete(xL, [ni_in, ni_out])
-    xi = jnp.array(xL)
-    toc(times, "Lcg")
   elif isinstance(xi, str):
     assert xi[0] == "L", "483: Unknown xi option"
     # Get xi from the linear system, solving with cg
@@ -510,7 +518,7 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
           opt={"ftol":5e-5})
         #db_print(soli.__dict__)
         xi = soli.x
-      print(503, "Done with presolving")
+      db_print(503, "Done with presolving")
       toc(times, f"xi presolving, method={ximethod}")
   else:
     xi = jnp.array(xi)
@@ -644,9 +652,9 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     trf_opt["ftol"] = .5 * trf_opt["ftol"]**2 * 10 # *10 arbitrary
     trf_opt["gtol"] = opt["gtol"] if "gtol" in opt else 1e-10
     # Make sure xi is feasible
-    print(617, len(xi[xi<0]))
+    db_print(617, len(xi[xi<0]))
     xi = xi.at[xi<0].set(0)
-    print(619, len(xi[xi>v_in]))
+    db_print(619, len(xi[xi>v_in]))
     Ii = xi[-1]
     xi = xi.at[xi>v_in].set(v_in)
     xi = xi.at[-1].set(Ii) # x[-1] has no upper bound
@@ -672,8 +680,8 @@ def NL_adam(jlx, jgx, xi, options):
     if it%10 == 0:
       rx = jlx(params['x'])
       gx = jgx(params['x'])
-      #print(f"Iteration {it}: x[-5:]={params['x'][-5:]}, loss={rx}")
-      print(f"Iteration {it};\tloss={rx:.6f};\tmax(grad)={jnp.max(gx):.6f}")
+      #db_print(f"Iteration {it}: x[-5:]={params['x'][-5:]}, loss={rx}")
+      db_print(f"Iteration {it};\tloss={rx:.6f};\tmax(grad)={jnp.max(gx):.6f}")
     grads = {'x': jgx(params['x'])}
     updates, state = opt.update(grads, state)
     params = optax.apply_updates(params, updates)
@@ -721,7 +729,7 @@ def NL_custom_N(res, jac, xi, options):
     step, *_ = jnp.linalg.lstsq(J1, -r1)
     # Find the best step along that line
     step_mlt, lm_fev = line_min(fnorm, x1, err, step) # Simple 1D optimization
-    print(536, step_mlt, lm_fev)
+    db_print(536, step_mlt, lm_fev)
     nfev += lm_fev
     step *= step_mlt
     step += laststep*momentum # Apply momentum
@@ -790,18 +798,18 @@ def NL_adpt(A, w, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
   opt["tol"] = tol
   while True:
     if opt["verbose"]:
-      print(783, f"Running method {method} with tol={tol}")
+      db_print(783, f"Running method {method} with tol={tol}")
     sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=method, opt=opt)
     if opt["verbose"]:
-      print(582, sol.message, sol.nfev)#, sol.x[-8:])
+      db_print(582, sol.message, sol.nfev)#, sol.x[-8:])
     # See if sol is an improvement and if it's good enough alredy
     if not sol.success:
-      print("Warning: the solver did not converge")
+      db_print("Warning: the solver did not converge")
       # I may still want to use the result if it's better than before
     #if sol.success:
     rx1 = np.linalg.norm(sol.fun)
     if opt["verbose"]:
-      print(f"ADPT step: Previous r={rxi:.8f}. New r={rx1:.8f}")
+      db_print(f"ADPT step: Previous r={rxi:.8f}. New r={rx1:.8f}")
     if rx1 < ftol: #sol.x is already good enough
       return sol
     if rx1 < rxi: #sol.x is better than the previous xi
@@ -832,7 +840,7 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
   rxi = np.linalg.norm(NL_res_j(xi, A, w, v_in, ni_in, ni_out))
   for mtd, tol in methods:
     if opt["verbose"]:
-      print(579, f"Running method {mtd} with tol={tol}")
+      db_print(579, f"Running method {mtd} with tol={tol}")
     #if mtd == "Lcg": # Linear, cg
     #  v1, R1, status = L_sol(L, v_in, ni_in, ni_out, tol=tol)
     #  x1 = np.append(v1, v_in / R1) # convert v to x
@@ -848,24 +856,24 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
       #opt["ftol"] = ftol
       sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=mtd, opt=opt)
     else:
-      print("Error: Unknown method")
+      db_print("Error: Unknown method")
     if opt["verbose"]:
-      print(582, sol.message, sol.nfev)#, sol.x[-8:])
+      db_print(582, sol.message, sol.nfev)#, sol.x[-8:])
     # See if sol is an improvement and if it's good enough alredy
     if not sol.success:
       # I may still want to use the result if it's better than before
       # However, when you start from a bad starting place, it's worse.
-      print("Warning: the solver did not converge")
+      db_print("Warning: the solver did not converge")
     if sol.success:
       rx1 = jnp.linalg.norm(sol.fun)
       v = ainsrt2(sol.x, ni_in, v_in, ni_out, 0)[0:-1]
       i_in = - sum_node_I(v, A, w, ni_in)
       i_out = sum_node_I(v, A, w, ni_out)
       KCL_err = jnp.ptp(jnp.array( (i_in, i_out, sol.x[-1]) ))
-      print(854, i_in, i_out, sol.x[-1], rx1)
+      db_print(854, i_in, i_out, sol.x[-1], rx1)
       err = max(KCL_err, rx1)
       if opt["verbose"]:
-        print(f"MLT step: Previous err={rxi:.8f}. New err={err:.8f}")
+        db_print(f"MLT step: Previous err={rxi:.8f}. New err={err:.8f}")
       if err < ftol: #sol.x is already good enough
         return sol
       if err < rxi: #sol.x is better than the previous xi
@@ -925,7 +933,7 @@ def NL_Axb(A, b, w=1, xi=None, method="n-k", opt={}):
       # Returns the residual and the Jacobian for the given x
       # Find the residual from the nonlinear verson of KCL
       # See OneNote > Nonlinear system
-      #print(218, np.max(x), np.min(x))
+      #db_print(218, np.max(x), np.min(x))
       vcols, vrows = np.meshgrid(x, x)
       sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
       Asinh = A.multiply(np.sinh(sinharg)).toarray() # A .* sinh()
@@ -942,7 +950,7 @@ def NL_Axb(A, b, w=1, xi=None, method="n-k", opt={}):
       hopt = {"xtol" : opt["xtol"]}
       #nkw["maxfev"] = 1e6
       sol = spo.root(res_jac, xi, method="hybr", jac=True, options=hopt)
-      #print(201, "nfev", sol.nfev)
+      #db_print(201, "nfev", sol.nfev)
     elif method == "trf":
       # "verbose" is a solver option for trf
       if "ftol" not in opt:
@@ -1015,8 +1023,8 @@ def L_sol(Lpl, v_in, ni_in, ni_out, method="cg", tol=1e-5):
   if method == "cg":
     xi = np.zeros(N)
     xi[ni_in] = v_in
-    #print(638, xi[-12:])
-    #yell = lambda xk : print(635, xk[-12:])#(Lpl.dot(xk)-b)[-10:])
+    #db_print(638, xi[-12:])
+    #yell = lambda xk : db_print(635, xk[-12:])#(Lpl.dot(xk)-b)[-10:])
     # Use scipy's conjugate gradient method, since Lpl is symmetric
     v, status = spsl.cg(Lpl, b, x0=xi, atol=atol)#, callback=yell)
     # Set the ground pin to zero, adjusting the answers accordingly
@@ -1108,10 +1116,10 @@ def LS_dist_test(DIM):
     ax.scatter(p0[0], p0[1], color="green")
     fig.show()
 
-  print(f"p0: {p0}, p1: {p1}")
-  print(f"v0: {v0}, v1: {v1}")
+  db_print(f"p0: {p0}, p1: {p1}")
+  db_print(f"v0: {v0}, v1: {v1}")
   dmin, pmin = min_LS_dist(p0, p1, v0, v1)#, 1)
-  print(f"Min dist = {dmin} @{pmin}")
+  db_print(f"Min dist = {dmin} @{pmin}")
 
   input("DONE.")
 
@@ -1161,11 +1169,11 @@ def LS_pt_dist_test(DIM):
     ax.scatter(pt[0], pt[1], color="red")
     fig.show()
 
-  print(f"pt: {pt}")
-  print(f"p: {p}")
-  print(f"v: {v}")
+  db_print(f"pt: {pt}")
+  db_print(f"p: {p}")
+  db_print(f"v: {v}")
   dmin, tmin = LS_pt_dist(pt, p, v)
-  print(f"Min dist = {dmin} @{tmin}")
+  db_print(f"Min dist = {dmin} @{tmin}")
 
   input("DONE.")
 

@@ -56,7 +56,7 @@ def prep_options(options_dict):
   if args.config_fname[-4:] == ".ini":
     cp.config_file = args.config_fname
   else:
-    print("The config file must have the '.ini' extension")
+    util.sim_log("The config file must have the '.ini' extension")
   cp.read(cp.config_file)
   alter_cp(cp, args, options_dict)
   
@@ -64,6 +64,8 @@ def prep_options(options_dict):
   util.debug = cp.getboolean("exec", "debug")
   # Set the timing variable in util
   util.timing = cp.getboolean("exec", "timing")
+  # TEMP
+  util.log_fname = f"""log_{cp.sim_id}.txt"""
   
   return cp
 
@@ -86,7 +88,7 @@ def alter_cp(cp, args, options_dict):
     try:
       int(args.Ni, 2)
     except ValueError:
-      print("Please format N_in as binary")
+      util.sim_log("Please format N_in as binary")
     else:
       cp.set("sim-train", "N_in", args.Ni)
       cp.set("sim-fwd_pass", "N_in", args.Ni)
@@ -94,7 +96,7 @@ def alter_cp(cp, args, options_dict):
     try:
       int(args.No, 2)
     except ValueError:
-      print("Please format N_out as binary")
+      util.sim_log("Please format N_out as binary")
     else:
       cp.set("sim-train", "N_out", args.No)
   if args.tf is not None:

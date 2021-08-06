@@ -129,7 +129,7 @@ class ResistorNetwork:
     if sum_p == 1:
       self.ftype_proportions = np.array(ftype_proportions)
     else:
-      print("Warning: the ftype_proportions list should add to 1")
+      util.sim_log("Warning: the ftype_proportions list should add to 1")
       self.ftype_proportions = np.array(ftype_proportions) / sum_p
 
     #TEMP
@@ -388,7 +388,7 @@ class ResistorNetwork:
         with open(fname, "w") as file:
           json.dump(RNdata, file)
     else:
-      print("Error: the file format must be .pickle or .json")
+      util.sim_log("Error: the file format must be .pickle or .json")
       return 1
     util.db_print(f"RN state saved to file {fname}")
     return fname
@@ -414,7 +414,7 @@ class ResistorNetwork:
       elif fname[-5:] == ".json":
         ftype["format"] = "json"
     if ftype["format"] == "?":
-      print("Error: the file format must be .pickle or .json")
+      util.sim_log("Error: the file format must be .pickle or .json")
       return 1
     
     if ftype["format"] == "pickle":
@@ -437,7 +437,7 @@ class ResistorNetwork:
       rn = cls.from_json(jso)
       return rn
     else:
-      print("Error: the file format must be .pickle or .json")
+      util.sim_log("Error: the file format must be .pickle or .json")
       return 1
 
   @property
@@ -475,7 +475,7 @@ class ResistorNetwork:
       bp = []
       for flmu, flsg, bpmu, bpsg, Ni in zip(self.fl_mus, self.fl_sgs,
         self.bpwr_mus, self.bpwr_sgs, N_each):
-        #print(464, flmu, flsg, bpmu, bpsg, Ni)
+        #util.sim_log(464, flmu, flsg, bpmu, bpsg, Ni)
         alim = -.999* flmu / flsg # How many stdvs away is zero(*)
         fl.append(tnorm.rvs(size=Ni, loc=flmu, scale=flsg,
           a=alim, b=self.sdevmax))
@@ -667,7 +667,7 @@ class ResistorNetwork:
     self.G.remove_edges_from(to_remove)
 
     if reposition:
-      print("401. Fiber repositioning on expansion not yet implemented.")
+      util.sim_log("401. Fiber repositioning on expansion not yet implemented.")
 
   def R_nn(self, n0, n1):
     """Resistance from node n0 to node n1
@@ -741,7 +741,7 @@ class ResistorNetwork:
       v = np.array(v, dtype=np.float) #Convert back to np
       I_in = sol.x[-1]
       I_in = np.float(I_in) #Convert back to np
-      print(848, v[n0i], v[n1i], I_in)
+      util.sim_log(848, v[n0i], v[n1i], I_in)
       Req = v_in / I_in
     else:
       # Get the Laplacian matrix for conductance
@@ -869,7 +869,7 @@ class ResistorNetwork:
       mp_nodes = mp_nodes[0:burn_i]
       mp_nodes_data = mp_nodes_data[0:burn_i]
       #util.db_print(f"1015: eps_burn caught {burn_i-n} extra fibers")
-    #print(997, mp_nodes, mp_nodes_data)
+    #util.sim_log(997, mp_nodes, mp_nodes_data)
     return mp_nodes, mp_nodes_data
 
   def burn(self, to_burn="p_max"):
@@ -1047,9 +1047,9 @@ class ResistorNetwork:
       lw_max = 20#*self.plt_ln_width # max line width
       atrb_max = np.max(list( nx.get_edge_attributes(self.G, 
         width_attrib).values() ))
-      #print(1093, lw_max / atrb_max)
+      #util.sim_log(1093, lw_max / atrb_max)
       lw_mlt = min(lw_max / atrb_max, 1e6)
-      #print(1094, lw_mlt)
+      #util.sim_log(1094, lw_mlt)
     
     if not edge_color is None:
       # Draw the edges
@@ -1118,9 +1118,9 @@ class ResistorNetwork:
             fiber_color = np.hstack(( .1*np.ones(np.shape(fiber_color)), 
               fiber_color, .1*np.ones(np.shape(fiber_color)), 
               0.25*np.ones(np.shape(fiber_color)) ))
-            print(697, fiber_color, np.min(fiber_color), np.max(fiber_color))
+            util.sim_log(697, fiber_color, np.min(fiber_color), np.max(fiber_color))
           # Quiver 3D doesn't support multiple colors, so I'd need a work-around
-          print("Specifying fiber color is not yet implemented in 3D, "
+          util.sim_log("Specifying fiber color is not yet implemented in 3D, "
             "so this is a work-around")
           if COLOR_BUBBLES:
             # Since Quiver 3D doesn't support varying color, my work-around

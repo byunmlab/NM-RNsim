@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from util import sim_log
 from util import db_print
 from util import str2arr
 from util import load_IO
@@ -62,14 +63,14 @@ def res_sim(cp, rn):
     #in_currents = rn.sum_currents(rn.in_pin_ids(N_in=Ni))
     i0 = rn.node(p0)["isnk"]
     i1 = rn.node(p1)["isnk"]
-    print(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
+    sim_log(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
     if abs(i0+i1) > 1e-4:
-      print("Significant KCL error")
+      sim_log("Significant KCL error")
   else:
     # Calculate the Req
     R = rn.R_pp(p0, p1)
     # Display the result
-  print(f"The equivalent resistance between {p0} and {p1} is {R}")
+  sim_log(f"The equivalent resistance between {p0} and {p1} is {R}")
   toc(times, "Calculating Req")
 
 def expand_sim(cp, rn):
@@ -88,13 +89,13 @@ def expand_sim(cp, rn):
   # Calculate the Req
   R = rn.R_nn(p0, p1)
   # Display the result
-  print(f"The equivalent resistance between {p0} and {p1} is {R}")
+  sim_log(f"The equivalent resistance between {p0} and {p1} is {R}")
   toc(times, "Calculating Req")
   
   # TEMP
   sample_edge = next(iter(rn.G.edges(data=True)))
-  print("New 0-1 res: ", sample_edge[2]["res"])
-  print("New 0-1 r: ", rn.inv_res_fun(sample_edge[2]["res"]))
+  sim_log("New 0-1 res: ", sample_edge[2]["res"])
+  sim_log("New 0-1 r: ", rn.inv_res_fun(sample_edge[2]["res"]))
   
   # Expand the RN
   rn.expand(percent / 100)
@@ -102,13 +103,13 @@ def expand_sim(cp, rn):
   
   # TEMP
   sample_edge = next(iter(rn.G.edges(data=True)))
-  print("New 0-1 res: ", sample_edge[2]["res"])
-  print("New 0-1 r: ", rn.inv_res_fun(sample_edge[2]["res"]))
+  sim_log("New 0-1 res: ", sample_edge[2]["res"])
+  sim_log("New 0-1 r: ", rn.inv_res_fun(sample_edge[2]["res"]))
   
   # Re-calculate Req
   R = rn.R_nn(p0, p1)
   # Display the result
-  print(f"The new equivalent resistance between {p0} and {p1} is {R}")
+  sim_log(f"The new equivalent resistance between {p0} and {p1} is {R}")
   toc(times, "Calculating Req")
   
   if save_expanded:
@@ -126,7 +127,7 @@ def power_sim(cp, rn):
   times = tic()
   # Send current through
   (p_max, _), *_ = rn.apply_v(V, p0, p1)
-  print(f"Max power: {p_max}")
+  sim_log(f"Max power: {p_max}")
   toc(times, "Apply v")
   
   # Optionally show and save a plot of the voltage in the network
@@ -181,19 +182,19 @@ def burn_sim(cp, rn):
   # Start timing
   times = tic()
   
-  print(f"Initial p0-p1 Req: {rn.R_nn(p0, p1)}")
+  sim_log(f"Initial p0-p1 Req: {rn.R_nn(p0, p1)}")
   # Print Req for other combinations 
   # TO DO: Make this better. There would need to be something differentiating
   #   input and output pins if this is to be automated.
-  print(f"Req: i0-o0: {rn.R_nn('in0', 'out0')}")
-  print(f"Req: i0-o1: {rn.R_nn('in0', 'out1')}")
-  #print(f"Req: i0-o2: {rn.R_nn('in0', 'out2')}")
-  print(f"Req: i1-o0: {rn.R_nn('in1', 'out0')}")
-  print(f"Req: i1-o1: {rn.R_nn('in1', 'out1')}")
-  #print(f"Req: i1-o2: {rn.R_nn('in1', 'out2')}")
-  #print(f"Req: i2-o0: {rn.R_nn('in2', 'out0')}")
-  #print(f"Req: i2-o1: {rn.R_nn('in2', 'out1')}")
-  #print(f"Req: i2-o2: {rn.R_nn('in2', 'out2')}")
+  sim_log(f"Req: i0-o0: {rn.R_nn('in0', 'out0')}")
+  sim_log(f"Req: i0-o1: {rn.R_nn('in0', 'out1')}")
+  #sim_log(f"Req: i0-o2: {rn.R_nn('in0', 'out2')}")
+  sim_log(f"Req: i1-o0: {rn.R_nn('in1', 'out0')}")
+  sim_log(f"Req: i1-o1: {rn.R_nn('in1', 'out1')}")
+  #sim_log(f"Req: i1-o2: {rn.R_nn('in1', 'out2')}")
+  #sim_log(f"Req: i2-o0: {rn.R_nn('in2', 'out0')}")
+  #sim_log(f"Req: i2-o1: {rn.R_nn('in2', 'out1')}")
+  #sim_log(f"Req: i2-o2: {rn.R_nn('in2', 'out2')}")
   toc(times, "Get Req")
   
   if one_per:
@@ -246,17 +247,17 @@ def burn_sim(cp, rn):
       # Save the burned RN to file
       RN.save_RN(rn, f"burn_{cp.sim_id}_B{n}.{cp.save_format}")
       toc(times)#, "Save RN")
-    print(f"Burn #{n} p0-p1 Req: {rn.R_nn(p0, p1)}")
+    sim_log(f"Burn #{n} p0-p1 Req: {rn.R_nn(p0, p1)}")
     # Print Req for other combinations
-    print(f"Req: i0-o0: {rn.R_nn('in0', 'out0')}")
-    print(f"Req: i0-o1: {rn.R_nn('in0', 'out1')}")
-    #print(f"Req: i0-o2: {rn.R_nn('in0', 'out2')}")
-    print(f"Req: i1-o0: {rn.R_nn('in1', 'out0')}")
-    print(f"Req: i1-o1: {rn.R_nn('in1', 'out1')}")
-    #print(f"Req: i1-o2: {rn.R_nn('in1', 'out2')}")
-    #print(f"Req: i2-o0: {rn.R_nn('in2', 'out0')}")
-    #print(f"Req: i2-o1: {rn.R_nn('in2', 'out1')}")
-    #print(f"Req: i2-o2: {rn.R_nn('in2', 'out2')}")
+    sim_log(f"Req: i0-o0: {rn.R_nn('in0', 'out0')}")
+    sim_log(f"Req: i0-o1: {rn.R_nn('in0', 'out1')}")
+    #sim_log(f"Req: i0-o2: {rn.R_nn('in0', 'out2')}")
+    sim_log(f"Req: i1-o0: {rn.R_nn('in1', 'out0')}")
+    sim_log(f"Req: i1-o1: {rn.R_nn('in1', 'out1')}")
+    #sim_log(f"Req: i1-o2: {rn.R_nn('in1', 'out2')}")
+    #sim_log(f"Req: i2-o0: {rn.R_nn('in2', 'out0')}")
+    #sim_log(f"Req: i2-o1: {rn.R_nn('in2', 'out1')}")
+    #sim_log(f"Req: i2-o2: {rn.R_nn('in2', 'out2')}")
     toc(times, "Get Req")
     if not one_per:
       V += V_step
@@ -353,7 +354,7 @@ def train_sim(cp, rn):
     int(cp.get(sim_section, "N_in"), 2)
     int(cp.get(sim_section, "N_out"), 2)
   except ValueError:
-    print("Please format N_in and N_out as binary")
+    sim_log("Please format N_in and N_out as binary")
     return
 
   rn.threshold_fraction = threshold_fraction
@@ -613,14 +614,14 @@ def fwd_pass_sim(cp, rn):
       try:
         int(cp.get(sim_section, "N_in"), 2)
       except ValueError:
-        print("Please format N_in as binary")
+        sim_log("Please format N_in as binary")
         return
       # If it's a valid binary number, then Ns_in is correct from before the if
   else:
     # load the IO file
     IO_df = load_IO(IO_fname)
     Ns_in = IO_df["IN"].to_numpy()
-  #print(471, Ns_in)
+  #sim_log(471, Ns_in)
 
   # Start timing
   times = tic()
@@ -638,10 +639,10 @@ def fwd_pass_sim(cp, rn):
     if save_RN:
       RN.save_RN(rn, f"RN_{cp.sim_id}_i{Ni}.{cp.save_format}")
     
-    print("The input currents were: ", in_currents)
-    print("The output currents were: ", currents)
+    sim_log("The input currents were: ", in_currents)
+    sim_log("The output currents were: ", currents)
     if threshold != None: 
-      print("The output was: ", output)
+      sim_log("The output was: ", output)
 
   toc(times, "Total fwd_pass sim", total=True)
 
@@ -714,12 +715,12 @@ def fp_RMSR(rn, IO_Ns, mode="max", msg=None):
   #pn_RMSR /= divisor
 
   if msg is not None:
-    print(f"The output currents {msg} are: ")
+    sim_log(f"The output currents {msg} are: ")
     for i in range(len(IO_Ns)):
       Ni, _ = IO_Ns[i]
-      print(f"\tfor input {Ni}: {out_currents[i,:]} (err={current_err[i]:.8f})")
-    # print(currents) # This is the lazy version
-    print(f"The %RMSR {msg} is: ", RMSR)
+      sim_log(f"\tfor input {Ni}: {out_currents[i,:]} (err={current_err[i]:.8f})")
+    # sim_log(currents) # This is the lazy version
+    sim_log(f"The %RMSR {msg} is: ", RMSR)
 
   return RMSR, out_currents, current_err
 
