@@ -46,7 +46,8 @@ for i_ks in range(len(v_ks)):
               l_is = [i_ks, i_flm0, i_flmr, i_ftpr, i_bpmr, i_pbfr, i_bf]
               sim_id = main_id + "".join([str(i) for i in l_is])
               ks = v_ks[i_ks]
-              cnd_len = (V/N)**(1/3) / ks
+              # For compatability, this has 2*, but it probably shouldn't
+              cnd_len = 2 * (V/N)**(1/3) / ks
               flm0 = v_flm0[i_flm0]
               flmr = v_flmr[i_flmr]
               fl_mus = [flm0, flm0/flmr]
@@ -70,14 +71,20 @@ for i_ks in range(len(v_ks)):
 def test(options):
   print(options["id"])
 
+def run(options):
+  try:
+    main.main(options)
+  except Exception as e:
+    print("Error running sim #", options["id"], e)
+
 def pool_mlt():
   pool = mp.Pool(max_processes)
   #pool.map(test, options_list)
   #result = pool.map(main.main, options_list)
   #print(result)
-  pool.map(main.main, options_list)
+  #pool.map(main.main, options_list)
+  pool.map(run, options_list)
 
 if __name__ == '__main__':
   pool_mlt();
-
 

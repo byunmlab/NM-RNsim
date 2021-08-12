@@ -740,8 +740,11 @@ class ResistorNetwork:
       v = util.ainsrt(sol.x, [(n0i, v_in), (n1i, 0)])[0:-1]
       v = np.array(v, dtype=np.float) #Convert back to np
       I_in = sol.x[-1]
-      I_in = np.float(I_in) #Convert back to np
+      I_in = np.float64(I_in) #Convert back to np
       util.sim_log(848, v[n0i], v[n1i], I_in)
+      # Avoid divide by zero
+      if np.abs(I_in) < 1e-30:
+        I_in = 1e-30
       Req = v_in / I_in
     else:
       # Get the Laplacian matrix for conductance
