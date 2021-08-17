@@ -1,4 +1,5 @@
-"""Parse log files
+"""Parse txt log files
+Not necessary now that I'm saving the RMSR values straight to csv
 """
 import argparse
 import numpy as np

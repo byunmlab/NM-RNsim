@@ -13,6 +13,7 @@ main_id = "DOE_"
 max_processes = 48
 V = 25
 N = 500
+bpm0 = .02
 
 """
 IVs for DOE		Low	Med	High	Description
@@ -34,6 +35,10 @@ v_bpmr = [1, 2, 3]
 v_pbfr = [.002, .006, .010]
 v_bf = [False, True]
 
+options_file = open("options_list.csv", "w")
+header_line = "SIM_ID,ks,fl_mu_0,fl_mu_ratio,ftype_proportions_0,"
+header_line += "bpwr_mu_ratio,preburn_fraction,burn_fibers"
+options_file.write(header_line)
 # Create list of options
 options_list = []
 for i_ks in range(len(v_ks)):
@@ -53,7 +58,6 @@ for i_ks in range(len(v_ks)):
               fl_mus = [flm0, flm0/flmr]
               ftp0 = v_ftpr[i_ftpr]
               ftype_proportions = [ftp0, 1-ftp0]
-              bpm0 = .02
               bpmr = v_bpmr[i_bpmr]
               bpwr_mus = [bpm0, bpm0/bpmr]
               pbfr = v_pbfr[i_pbfr]
@@ -67,6 +71,11 @@ for i_ks in range(len(v_ks)):
                 "preburn_fraction": str(pbfr),
                 "burn_fibers": str(bf)
               })
+              # Also write a line to the options_list file
+              line = sim_id + "," + str(ks) + "," + str(flm0) + "," + str(flmr)
+              line += "," + str(ftp0) + "," + str(bpmr) + "," + str(pbfr)
+              line += "," + str(bf) + "\n"
+              options_file.write(line)
 
 def test(options):
   print(options["id"])

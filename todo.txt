@@ -5,9 +5,16 @@ CURRENT TO DO:
   - (LATER) Figure out how to use sparse matrices in jax
 - Try RELU activation (random diodes)
 - Investigate max(res) in addition to ||res||
+- Vary Vbp in the DOE
 
 IN PROGRESS:
-- Running DOE3_trsts (tighter xtol & ftol) -- estimated finish date: 08/24 (274/1458 done at 2021-08-12T09:17:00)
+- Running DOE3_trsts (tighter xtol & ftol)
+  - Estimated finish date: 08/30 (or 09/08, by sqrt fit extrapolation)
+  - Started on Monday, 08/09 (I think)
+  - (274/1458 done at 2021-08-12T09:17:00-05:00)
+  - (500/1458 done at 2021-08-16T18:05:00-05:00)
+  - (522/1458 done at 2021-08-17T08:25:00-05:00)
+- Making RELU an option (each node is a diode) (NEXT: NL_I_RELU)
 
 RECENTLY DONE:
 - Analyze results of DOE_trsts
@@ -19,6 +26,8 @@ RECENTLY DONE:
   --> Next: How to pipe output to separate log files
 - Tweak the NL_mlt method so it considers KCL error. I'm decently happy with it now.
   - Make adaptive method that tries HYBR first, then TRF if there's KCL error, high ||res||, or I != i_in & i_out.
+
+OLDER DONE:
 - Try shgo -- >5hr with no results. Granted, it was sharing resources on the GPU for part of that time.
 - Try dual_annealing -- 1.5hrs to get a result.
 - Try basinhopping -- Not working well
@@ -39,8 +48,6 @@ RECENTLY DONE:
 112_v3 : Repeat 112 with really NL system
 - Run new FP on 100_18r2 --> Not XOR
 - mlt method: xi from cg or hybr
-
-OLDER DONE:
 112_v2 : Repeat of 112, but with NL output current calculation.
 112 : Repeat 97 (vary ks), with new burn technique.
 111_v2 : Repeat of 111 but with new, adaptive burn_rate
