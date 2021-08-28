@@ -28,6 +28,7 @@ class ResistorNetwork:
   pin_res = 1e-6 #Resistance btw pins and the nodes they intersect with. It's an arbitrarily low resistance.
   res_k = 10000 #Coefficient multiplier for resistance calculation btw nodes
   res_w = 1 #Coefficient for argument of sinh in nonlinear sim. IE how steeply nonlinear.
+  nlfun = "sinh" #sinh or relu for NL_sol
   min_res = 1e-6 #Min resistance. Think of the resistance of the fiber itself, even if they're touching
   # Solution method: "spsolve", "splsqr", "cg". 
   #   splsqr is not a good idea because the matrix is symmetric, 
@@ -170,6 +171,7 @@ class ResistorNetwork:
     cls.min_res = cp.getfloat("RN-res", "min_res")
     cls.sol_method = cp.get("RN-res", "sol_method")
     cls.res_w = cp.getfloat("RN-res", "res_w")
+    cls.nlfun = cp.get("RN-res", "nlfun")
     cls.xtol = cp.getfloat("RN-res", "xtol")
     cls.ftol = cp.getfloat("RN-res", "ftol")
     # Load the plotting options
@@ -446,6 +448,15 @@ class ResistorNetwork:
     Often we want to iterate through all the pins.
     """
     return self.in_pins + self.out_pins
+
+  def ispin(self, node):
+    """Test whether the given node is a pin
+    """
+    return node in self.pin_keys
+    #for pin in self.pins:
+    #  if node == pin[0]:
+    #    return True
+    #return False
 
   def create_graph(self):
     if self.pts is None:
@@ -726,13 +737,25 @@ class ResistorNetwork:
         nodelist=self.node_list)
       # TODO: Also use the other paremeters for the N-K method.
       # TODO: Keep track of if it succeeded or not.
-      vrb = 1#TMP
-      opt = {"verbose" : vrb,
+      vrb = 2#TMP
+      params = { # Parameters that define the problem
+        "A": Adj,
+        "w": self.res_w,
+        "pinids": tuple([self.key_to_index(pin) for pin in self.pin_keys]),
+        "v_in": v_in,
+        "ni_in": n0i,
+        "ni_out": n1i,
+        "nlfun" : self.nlfun
+      }
+      options = { # Options about how to solve it
+        "method": self.sol_method, 
+        "verbose" : vrb,
         "xtol" : self.xtol,
-        "ftol" : self.ftol}
+        "ftol" : self.ftol,
+        "xi" : "Lcg"
+      }
       # OLD: v = util.NL_Axb(Adj, b, w=self.res_w, method=self.sol_method, opt=opt)
-      sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="Lcg",
-        method=self.sol_method, opt=opt)
+      sol = util.NL_sol(params, options)
       #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_custom_32",
       #  method=self.sol_method, opt=opt)
       #sol = util.NL_sol(Adj, self.res_w, v_in, n0i, n1i, xi="L_hybr_3",
@@ -778,26 +801,32 @@ class ResistorNetwork:
         en1 = edge[1]
         ei0 = self.key_to_index(en0)
         ei1 = self.key_to_index(en1)
-        dv = float(v[ei1] - v[ei0])
+        vp = v[ei0]
+        vn = v[ei1]
+        #dv = float(v[ei1] - v[ei0]) # Old way is backwards
         G = edge[2]["cnd"]
+        params = {
+          "G": G,
+          "w": self.res_w
+        }
         
         # Calculate & save current
         if set_i:
           if self.sol_method in util.NL_methods:
-            i = util.NL_I(G, self.res_w, dv)
+            i = util.NL_I(vp, vn, params, nlfun=self.nlfun)
           else:
-            i = G * dv
+            i = G * (vp - vn)
           self.G[en0][en1]["i"] = abs(i)
           self.G.nodes[en0]["i"] += abs(i)
           self.G.nodes[en1]["i"] += abs(i)
-          self.G.nodes[en0]["isnk"] += i
-          self.G.nodes[en1]["isnk"] -= i
+          self.G.nodes[en0]["isnk"] -= i
+          self.G.nodes[en1]["isnk"] += i
         
         # Calculate edge power
         if self.sol_method in util.NL_methods:
-          p = util.NL_P(G, self.res_w, dv)
+          p = util.NL_P(vp, vn, params, nlfun=self.nlfun)
         else:
-          p = G * dv**2
+          p = G * (vp-vn)**2
         # Save this edge power value
         self.G[en0][en1]["p"] = p
         # Save the square of power (could be used for plot line thickness)
@@ -1099,7 +1128,7 @@ class ResistorNetwork:
     # Array of positions
     pos = nx.get_node_attributes(self.G, 'pos')
     if self.fibers:
-      [pos.pop(pin[0]) for pin in self.pins] #This cuts out the pins
+      [pos.pop(pin) for pin in self.pin_keys] #This cuts out the pins
       pos = np.array(list(pos.values()))
       # Array of fiber v
       fv = nx.get_node_attributes(self.G, 'fv')
@@ -1568,26 +1597,34 @@ class ResistorNetwork:
     for edge in self.G.edges(data=True, nbunch=nodes):
       en0 = edge[0]
       en1 = edge[1]
-      dv = float(voltages[en1] - voltages[en0])
+      #dv = float(voltages[en1] - voltages[en0]) # Backwards from current order
+      vp = voltages[en0]
+      vn = voltages[en1]
       G = edge[2]["cnd"]
       if nonlinear:
-        i = util.NL_I(G, self.res_w, dv)
+        params = {
+          "G": G,
+          "w": self.res_w,
+          #"pinids": tuple([self.key_to_index(pin) for pin in self.pin_keys]),
+          "not_relu": (en0 in self.pin_keys) or (en1 in self.pin_keys)
+        }
+        i = util.NL_I(vp, vn, params, nlfun=self.nlfun)
       else:
-        i = G * dv
+        i = G * (vp-vn)
       # Only worry about the nodes in the list
       if en0 in currents:
         currents[en0] += abs(i)
-        sinking[en0] += i
+        # if i>0, then v0>v1, so n0 is the source & n1 is the sink
+        sinking[en0] -= i
       if en1 in currents:
         currents[en1] += abs(i)
-        # if i>0, then v1>v0, so n1 is the source & n0 is the sink
-        sinking[en1] -= i
+        sinking[en1] += i
       if store:
         self.G[en0][en1]["i"] = abs(i)
         self.G.nodes[en0]["i"] += abs(i)
         self.G.nodes[en1]["i"] += abs(i)
-        self.G.nodes[en0]["isnk"] += i
-        self.G.nodes[en1]["isnk"] -= i
+        self.G.nodes[en0]["isnk"] -= i
+        self.G.nodes[en1]["isnk"] += i
 
     #for n, v in voltages.items():
     #  sum_in = 0

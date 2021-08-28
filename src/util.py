@@ -366,48 +366,113 @@ def line_min(f, x0, fx0, dx, mlt=1, fx2=None, nfev=0, fev_max=16):
   # The optimum is between the last three values
   return (i-2 + parabola_opt(*fn[-3:]))*mlt, nfev
 
-def NL_I(G, w, v):
+#def NL_I(G, w, v, nlfun="sinh"):
+def NL_I(vp, vn, params, nlfun="sinh"):
   """Simple calculation of current in the nonlinear system.
   Parameters
   ----------
-    G : conductivity (iv slope @v=0)
-    w : the coefficient on the argument for sinh(wx)
-    v : the voltage drop
+    vp: voltage at anode
+    vn: voltage at cathode
+    params (dict): Parameters for the current calculation.
+      if nlfun==sinh:
+        params["G"]: conductivity (iv slope @v=0)
+        params["w"]: the coefficient on the argument for sinh(wx)
+      if nlfun==relu:
+        params["G"]: conductivity (iv slope @v>0)
+    nlfun (str) : Which function? (sinh or relu)
+  Returns
+  -------
+    i: Current. Positive current flows from anode to cathode by PSC
   """
-  return G/w * np.sinh(w*v)
-def NL_P(G, w, v):
+  if nlfun == "sinh":
+    return params["G"]/params["w"] * np.sinh(params["w"]*(vp-vn))
+  elif nlfun == "relu":
+    i = params["G"]*(vp - vn)
+    is_on = (i>0)
+    # If this is a vector with all the nodes, then exempt the pins
+    if hasattr(is_on, "__len__") and len(is_on) > max(params["pinids"]):
+      #is_on = is_on.at[params["pinids"]].set(1)
+      is_on = jax.ops.index_update(is_on, jnp.array(params["pinids"]), 1)
+    elif "not_relu" in params and params["not_relu"]:
+      # Exception for individual nodes to be non-relu
+      is_on = 1
+    return i * is_on
+#def NL_P(G, w, v, nlfun="sinh"):
+def NL_P(vp, vn, params, nlfun="sinh"):
   """Simple calculation of power (p=vi) in the nonlinear system.
   Parameters
   ----------
-    G : conductivity (iv slope @v=0)
-    w : the coefficient on the argument for sinh(wx)
-    v : the voltage drop
+    vp: voltage at anode
+    vn: voltage at cathode
+    params (dict): Parameters for the current calculation.
+      if nlfun==sinh:
+        params["G"]: conductivity (iv slope @v=0)
+        params["w"]: the coefficient on the argument for sinh(wx)
+      if nlfun==relu:
+        params["G"]: conductivity (iv slope @v>0)
+    nlfun (str) : Which function? (sinh or relu)
+  Returns
+  -------
+    p: Power.
   """
-  i = NL_I(G, w, v)
-  return v*i
+  i = NL_I(vp, vn, params, nlfun=nlfun)
+  return (vp-vn)*i
 
-def sum_node_I(v, A, w, ni):
+def sum_node_I(v, A, ni, w, pinids, nlfun="sinh"):
   """Like RN.sum_currents, return the current sinked by the given node
   The difference is that this operates with the adjacency matrix.
+  Parameters
+  ----------
+    v: vector of voltages
+    A: adjacency matrix for conductance
+    ni: index of node
+    w: coefficient for sinh
+    nlfun (str) : Which function? (sinh or relu)
   """
-  dv = v[ni] - v
-  i_in = - NL_I(A[ni,:], w, dv)
+  vn = v[ni]*np.ones(v.shape)
+  params = {
+    "G": A[ni,:],
+    "w": w,
+    "pinids": pinids
+  }
+  i_in = NL_I(v, vn, params, nlfun=nlfun)
+  #dv = v[ni] - v #OLD
+  #i_in = - NL_I(A[ni,:], w, dv)
   return jnp.sum(i_in)
 
 # These calculate the residuals for a given x vector in the NL system
-def NL_res_j(x, A, w, v_in, ni_in, ni_out):
+def NL_res_j(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
   """NL_res, but compatible with jit.
   Also take note of the changed order of arguments
   """
   N = x.size + 2
   v = ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
   vcols, vrows = jnp.meshgrid(v, v)
-  sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-  Asinh = jnp.multiply(A, jnp.sinh(sinharg))
-  sumI = Asinh.sum(1) / w # sum of currents leaving each node
+  if fun == "sinh":
+    sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
+    Asinh = jnp.multiply(A, jnp.sinh(sinharg))
+    sumI = Asinh.sum(1) / w # sum of currents leaving each node
+  elif fun == "relu":
+    V = (vrows - vcols)
+    pin_indices = jnp.array([ni_in, ni_out, *pinids]) # Only for the immediate input and output...
+    vsrc = (V > 0)
+    # It's always okay for current to flow in or out of the pins
+    vsrc = vsrc.at[:,pin_indices].set(1) 
+    vsrc = vsrc.at[pin_indices,:].set(1)
+    vsnk = (V < 0)
+    vsnk = vsnk.at[:,pin_indices].set(1)
+    vsnk = vsnk.at[pin_indices,:].set(1)
+    # This method says that current should flow from low index pins
+    triui = jnp.triu_indices(N, 1)
+    trili = jnp.tril_indices(N, -1)
+    #G = A.at[triui].multiply(vsrc[triui])
+    G = jax.ops.index_mul(A, triui, vsrc[triui])
+    #G = G.at[trili].multiply(vsnk[trili])
+    G = jax.ops.index_mul(G, trili, vsnk[trili])
+    sumI = jnp.multiply(G, V).sum(1)
   res = sumI.at[ni_in].add(- x[-1])
   res = res.at[ni_out].add(x[-1])
-  return res#[1:] # Throw one equation out
+  return res#[1:] # Throw one equation out (the first one)
 def NL_res_old(A, w, v_in, ni_in, ni_out, x):
   # Find the residual from the nonlinear verson of KCL
   # Recover the voltage vector
@@ -457,27 +522,29 @@ def NL_resjac(A, w, v_in, ni_in, ni_out, x):
   #J = np.concatenate((J, Jsup), axis=0)
   return r, J
 
-def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
-  """Solve the nonlinear system.
+#OLD Definition: def NL_sol(A, params, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
+def NL_sol(params, options):
+  """Solve the given nonlinear problem.
   Parameters
   ----------
-    A (NxN scipy matrix) : the Adjacency Matrix of the RN
-    w (float) : the coefficient on the argument for sinh(wx)
-      This can be related to the 3rd derivative of the i-v curve at zero.
-    v_in (float) : the input voltage
-    ni_in (int) : the index of the input node [0,N-1]
-    ni_out (int) : the index of the output node [0,N-1]
-    xi (N+1 np array) : initial guess for the solution. If None, xi=0
-      If "Lcg", then find an xi by solving the linear system with cg
-      If "L_{nonlin_method}_{N} then solve sequentially for better xi-s
-        by gradually increasing the nonlinearity N times.
-    method ("n-k", "hybr", "trf", "mlt") : the solution method 
-      see util.NL_methods
-      (n-k and hybr are suggested, but there's also trf)
-      "mlt" (multiple) means first try hybr, then trf or nk if that fails.
-    opt (dict) : solver options, to be passed on to the solver.
-      May include a "verbose" option.
-      "xtol" is important for hybr
+    params (dict): Parameters that define the problem
+      A (NxN scipy matrix): the Adjacency Matrix of the RN
+      w (float, for SINH): the coefficient on the argument for sinh(wx)
+        This can be related to the 3rd derivative of the i-v curve at zero.
+      pinids (tuple of int, for RELU): the indexes of the pins
+      v_in (float): the applied voltage
+      ni_in (int, [0,N-1]): the index of the input node
+      ni_out (int, [0,N-1]): the index of the output node
+      nlfun ("sinh" or "relu"): Which function to use
+    options (dict): Options about how to solve it
+      method (element of util.NL_methods): Which solver to use
+      verbose (int, [0,3]): Verbosity
+      xtol: tolerance in x
+      ftol: tolerance in f
+      xi (str or N+1 np array) : initial guess for the solution. If None, xi=0
+        If "Lcg", then find an xi by solving the linear system with cg
+        If "L_{nonlin_method}_{N} then solve sequentially for better xi-s
+          by gradually increasing the nonlinearity N times. (for SINH)
   Returns
   -------
     sol (OptimizeResult) : the solver result
@@ -487,19 +554,52 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
 
   times = tic()
 
-  if "verbose" not in opt:
-    opt["verbose"] = debug
-  if type(opt["verbose"]) != int:
-    opt["verbose"] = 1 if opt["verbose"] else 0
-  if opt["verbose"] > 2:
-    db_print(f"Starting Nonlinear Solver: {method}")
+  # Rename the contents of params for convenience
+  A = params["A"]
+  w = params["w"]
+  pinids = params["pinids"]
+  v_in = params["v_in"]
+  ni_in = params["ni_in"]
+  ni_out = params["ni_out"]
+  nlfun = params["nlfun"] if "nlfun" in params else "sinh"
+
+  # If necessary, convert A to a jnp array
+  if hasattr(params["A"], "toarray"):
+    A = jnp.array(A.toarray())
+
+  # Now reload the edited params into fprms
+  fprms = {} # Filtered params
+  fprms["A"] = A
+  fprms["w"] = w
+  fprms["pinids"] = pinids
+  fprms["v_in"] = v_in
+  fprms["ni_in"] = ni_in
+  fprms["ni_out"] = ni_out
+  fprms["nlfun"] = nlfun
+
+  # Build some things based on params
   N = A.shape[1]-1 # len(x) = N_nodes + 1 - 2
+  ubound = v_in * np.ones(N)
+  ubound[-1] = np.inf # No bound on current
+  bounds = (np.zeros(N)-1e-6, ubound+1e-6)
+
+  # Rename some of the contents of options for convenience
+  xi = options["xi"]
+  method = options["method"]
+  verbose = options["verbose"] if "verbose" in options else debug
+
+  # If verbose is not an int, then make it a 0/1 bool
+  if type(verbose) != int:
+    verbose = int(bool(verbose))
+
+  # Come up with a good xi if needed
   if xi is None:
     xi = jnp.zeros(N).at[ni_in].set(v_in)
   elif isinstance(xi, str):
     assert xi[0] == "L", "483: Unknown xi option"
     # Get xi from the linear system, solving with cg
-    L = L_from_A(A)
+    #L = L_from_A(A)
+    L = L_from_A(params["A"]) # Use the sps version. Makes this a little fragile
     vL, RL, status = L_sol(L, v_in, ni_in, ni_out, tol=1e-7)
     xL = np.append(vL, v_in / RL) # convert v to x
     xL = np.delete(xL, [ni_in, ni_out])
@@ -510,32 +610,47 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       # Presolving with smaller w. Format: "L_method_N"
       xi_parts = xi.split("_") 
       xi = jnp.array(xL)
-      N = int(xi_parts[2])
+      N_pre = int(xi_parts[2])
       ximethod = xi_parts[1]
       assert ximethod in NL_methods
-      # Make N simpler versions of the system to solve
-      for i in range(N):
-        wi = w * ( (i+1)/(N+1) )**2
-        soli = NL_sol(A, wi, v_in, ni_in, ni_out, xi=xi, method=ximethod, 
-          opt={"ftol":5e-5})
+      # Make N_pre simpler versions of the system to solve
+      for i in range(N_pre):
+        wi = w * ( (i+1)/(N_pre+1) )**2
+        params_i = fprms.copy()
+        params_i["w"] = wi
+        options_i = {
+          "xi": xi,
+          "method": ximethod,
+          "xtol": options["xtol"] if "xtol" in options else 1e-7,
+          "ftol": options["ftol"] if "ftol" in options else 1e-6
+        }
+        soli = NL_sol(params_i, options_i)
+        #soli = NL_sol(A, params, v_in, ni_in, ni_out, xi=xi, method=ximethod, 
+        #  options={"ftol":5e-5})
         #db_print(soli.__dict__)
         xi = soli.x
       db_print(503, "Done with presolving")
       toc(times, f"xi presolving, method={ximethod}")
   else:
     xi = jnp.array(xi)
-  if hasattr(A, "toarray"):
-    # Convert to jax array
-    A = jnp.array(A.toarray())
-  ubound = v_in * np.ones(N)
-  ubound[-1] = np.inf # No bound on current
-  bounds = (np.zeros(N)-1e-6, ubound+1e-6)
+
+  fopt = {} # Filtered options
+  fopt["xi"] = xi
+  fopt["method"] = method
+  fopt["verbose"] = verbose
+  if "xtol" in options:
+    fopt["xtol"] = options["xtol"]
+  if "ftol" in options:
+    fopt["ftol"] = options["ftol"]
+
+  if verbose > 2:
+    db_print(f"Starting Nonlinear Solver: {method}")
 
   # Create jit compiled versions of the function
-  jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5])
-  res = lambda x: jres(x, A, w, v_in, ni_in, ni_out)
-  jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5])
-  jac = lambda x: jjac(x, A, w, v_in, ni_in, ni_out)
+  jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5,6,7])
+  res = lambda x: jres(x, A, w, pinids, v_in, ni_in, ni_out, nlfun)
+  jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5,6,7])
+  jac = lambda x: jjac(x, A, w, pinids, v_in, ni_in, ni_out, nlfun)
 
   #toc(times, "jit")
   rxi = res(xi)
@@ -551,11 +666,10 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
   if method == "mlt":
     # Chain multiple solvers
     #ltol = 5e-3
-    xtol = opt["xtol"] if "xtol" in opt else 1e-5
-    ftol = opt["ftol"] if "ftol" in opt else 1e-3
+    xtol = options["xtol"] if "xtol" in options else 1e-5
+    ftol = options["ftol"] if "ftol" in options else 1e-3
     # List of solvers and tolerances
     methods = [
-      #("hybr", xtol*10),
       ("hybr", xtol*100),
       ("hybr", xtol),
       ("trf", xtol/16),
@@ -568,60 +682,64 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
       #("hybr", stol)]#,
       #("trf", stol),
       #("n-k", stol)]
-    sol = NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol=ftol, opt=opt)
+    sol = NL_mlt(fprms, fopt, methods, ftol)
     return sol
 
   elif method == "optax-adam":
+    # TODO: broken
     # Scalar conversion
-    loss = lambda x,A,w,v_in,ni_in,ni_out: jnp.sum(jnp.square(NL_res_j(x, A,
-      w, v_in, ni_in, ni_out)))
-    jloss = jax.jit(loss, static_argnums=[2,3,4,5])
-    jgrad = jax.jit(jax.grad(loss, 0), static_argnums=[2,3,4,5])
-    jlx = lambda x: jloss(x,A,w,v_in,ni_in,ni_out) #"jlx" = Jitted Loss (x)
-    jgx = lambda x: jgrad(x,A,w,v_in,ni_in,ni_out)
+    loss = lambda x,A,w,pinids,v_in,ni_in,ni_out: jnp.sum(jnp.square(NL_res_j(
+      x, A, w, pinids, v_in, ni_in, ni_out, nlfun)))
+    jloss = jax.jit(loss, static_argnums=[2,3,4,5,6])
+    jgrad = jax.jit(jax.grad(loss, 0), static_argnums=[2,3,4,5,6])
+    jlx = lambda x: jloss(x,A,w,pinids,v_in,ni_in,ni_out) #"jlx" = Jitted Loss (x)
+    jgx = lambda x: jgrad(x,A,w,pinids,v_in,ni_in,ni_out)
     # Parameters
-    options = {
+    adam_opt = {
       "lrn_rate": 1e-3,
       "maxit": 4000
     }
-    sol = NL_adam(jlx, jgx, xi, options)
+    sol = NL_adam(jlx, jgx, xi, adam_opt)
     toc(times, f"Optax Adam solver (w={w})")
 
   elif method == "custom":
-    options = {
+    # Broken
+    cust_opt = {
       "maxit": 400,
-      "xtol": opt["xtol"] if "xtol" in opt else 1e-10,
-      "rtol": opt["ftol"] if "ftol" in opt else 1e-4,
+      "xtol": options["xtol"] if "xtol" in options else 1e-10,
+      "rtol": options["ftol"] if "ftol" in options else 1e-4,
       "leash": 8,
       "momentum": 0.1
     }
-    sol = NL_custom_N(res, jac, xi, options)
+    sol = NL_custom_N(res, jac, xi, cust_opt)
     toc(times, f"Custom Newton solver (w={w})")
 
   elif method == "n-k":
     #residual = lambda x: NL_res(A, w, v_in, ni_in, ni_out, x)
-    xtol = opt["xtol"] if "xtol" in opt else 1e-3
-    ftol = opt["ftol"] if "ftol" in opt else 1e-2
-    if "tol" in opt: # Generic tol
-      xtol = opt["tol"]
+    xtol = options["xtol"] if "xtol" in options else 1e-3
+    ftol = options["ftol"] if "ftol" in options else 1e-2
+    if "tol" in options: # Generic tol
+      xtol = options["tol"]
     nkopt = {
-      "disp": True if opt["verbose"] > 0 else False,
+      "disp": True if options["verbose"] > 0 else False,
       "xtol": xtol,
       "ftol": ftol,
       "jac_options": {"rdiff": .05}
-      }
+    }
     sol = spo.root(res, xi, method="krylov", options=nkopt)
   elif method == "hybr":
     # Make it square for hybr
-    res = lambda x: jres(x, A, w, v_in, ni_in, ni_out)[1:]
-    jac = lambda x: jjac(x, A, w, v_in, ni_in, ni_out)[1:]
+    res = lambda x: jres(x, A, w, pinids, v_in, ni_in, ni_out, nlfun)[1:]
+    jac = lambda x: jjac(x, A, w, pinids, v_in, ni_in, ni_out, nlfun)[1:]
     #res_jac = lambda x: NL_resjac(A, w, v_in, ni_in, ni_out, x)
-    xtol = opt["xtol"] if "xtol" in opt else 1e-3
-    if "tol" in opt:
-      xtol = opt["tol"]
-    hopt = {"xtol" : xtol,
+    xtol = options["xtol"] if "xtol" in options else 1e-3
+    if "tol" in options:
+      xtol = options["tol"]
+    hopt = {
+      "xtol" : xtol,
       "maxfev": 1000000,
-      "factor": 1}
+      "factor": 1
+    }
     # Scale the variable for current so it's more significant
     hopt["diag"] = np.ones(N)
     hopt["diag"][-1] = N
@@ -643,16 +761,16 @@ def NL_sol(A, w, v_in, ni_in, ni_out, xi=None, method="hybr", opt={}):
     # Scale the variable for current so it's more significant
     #opt["x_scale"] = np.ones(N)
     #opt["x_scale"] = N/10
-    trf_opt["verbose"] = opt["verbose"] if "verbose" in opt else 0
-    if "tol" in opt:
-      trf_opt["xtol"] = opt["tol"]
+    trf_opt["verbose"] = options["verbose"] if "verbose" in options else 0
+    if "tol" in options:
+      trf_opt["xtol"] = options["tol"]
     if "xtol" not in trf_opt:
       trf_opt["xtol"] = 1e-6
     # This ftol refers to SSR cost, not ||res||
     # Actually, it's relative (dF / F), not absolute cost
-    trf_opt["ftol"] = opt["ftol"] if "ftol" in opt else 1e-3
+    trf_opt["ftol"] = options["ftol"] if "ftol" in options else 1e-3
     trf_opt["ftol"] = .5 * trf_opt["ftol"]**2 * 10 # *10 arbitrary
-    trf_opt["gtol"] = opt["gtol"] if "gtol" in opt else 1e-10
+    trf_opt["gtol"] = options["gtol"] if "gtol" in options else 1e-10
     # Make sure xi is feasible
     db_print(617, len(xi[xi<0]))
     xi = xi.at[xi<0].set(0)
@@ -782,7 +900,7 @@ def NL_custom_N(res, jac, xi, options):
   sol.success = True # TMP
   return sol
 
-def NL_adpt(A, w, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
+def NL_adpt(A, params, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
   """Adaptive method that keeps trying more careful solvers until
   it reaches ftol. Also considers KCL error.
     The following two values must be < ftol
@@ -792,16 +910,17 @@ def NL_adpt(A, w, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
   NOT FINISHED, NOT USED. I'll probably stick with NL_mlt
   """
 
+  nlfun = opt["nlfun"] if "nlfun" in opt else "sinh"
   if rxi is None:
     # Initial r
-    rxi = np.linalg.norm(NL_res_j(xi, A, w, v_in, ni_in, ni_out))
+    rxi = np.linalg.norm(NL_res_j(xi, A, params["w"], params["pinids"], v_in, ni_in, ni_out, nlfun))
   method = "hybr" # Fastest, but less reliable sometimes
   tol = 10*ftol
   opt["tol"] = tol
   while True:
     if opt["verbose"]:
       db_print(783, f"Running method {method} with tol={tol}")
-    sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=method, opt=opt)
+    sol = NL_sol(A, params, v_in, ni_in, ni_out, xi=xi, method=method, opt=opt)
     if opt["verbose"]:
       db_print(582, sol.message, sol.nfev)#, sol.x[-8:])
     # See if sol is an improvement and if it's good enough alredy
@@ -820,7 +939,8 @@ def NL_adpt(A, w, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
   # NOT FINISHED
   return sol
 
-def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
+#def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
+def NL_mlt(params, options, methods, final_ftol):
   """More convenient interface for NL_sol(method="mlt")
   Parameters
   ----------
@@ -832,34 +952,34 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
         ("hybr", stol),
         ("trf", stol),
         ("n-k", stol)]
-    ftol (float) : Stopping tolerance for the residual r
+    final_ftol (float) : Stopping tolerance for the residual r
   Returns
   -------
     sol (OptimizeResult) : the solver result
   """
 
+  A = params["A"]
+  w = params["w"]
+  pinids = params["pinids"]
+  v_in = params["v_in"]
+  ni_in = params["ni_in"]
+  ni_out = params["ni_out"]
+  nlfun = params["nlfun"]
+  xi = options["xi"]
+  opt_i = options.copy()
+
   # Initial r
-  rxi = np.linalg.norm(NL_res_j(xi, A, w, v_in, ni_in, ni_out))
+  rxi = np.linalg.norm(NL_res_j(xi, A, w, pinids, v_in, ni_in, ni_out, nlfun))
   for mtd, tol in methods:
-    if opt["verbose"]:
+    if options["verbose"]:
       db_print(579, f"Running method {mtd} with tol={tol}")
-    #if mtd == "Lcg": # Linear, cg
-    #  v1, R1, status = L_sol(L, v_in, ni_in, ni_out, tol=tol)
-    #  x1 = np.append(v1, v_in / R1) # convert v to x
-    #  x1 = np.delete(x1, [ni_in, ni_out])
-    #  def sol(): pass # Make empty sol object
-    #  sol.success = (status == 0)
-    #  sol.message = ""
-    #  sol.nfev = -1
-    #  sol.x = x1
-    #  sol.fun = NL_res_j(x1, A, w, v_in, ni_in, ni_out)
-    if mtd in NL_methods:
-      opt["tol"] = tol
-      #opt["ftol"] = ftol
-      sol = NL_sol(A, w, v_in, ni_in, ni_out, xi=xi, method=mtd, opt=opt)
+    if mtd in NL_methods and mtd != "mlt":
+      opt_i["xtol"] = tol
+      opt_i["method"] = mtd
+      sol = NL_sol(params, opt_i)
     else:
       db_print("Error: Unknown method")
-    if opt["verbose"]:
+    if options["verbose"]:
       db_print(582, sol.message, sol.nfev)#, sol.x[-8:])
     # See if sol is an improvement and if it's good enough alredy
     if not sol.success:
@@ -868,132 +988,29 @@ def NL_mlt(A, w, v_in, ni_in, ni_out, xi, methods, ftol, opt):
       db_print("Warning: the solver did not converge")
     if sol.success:
       rx1 = jnp.linalg.norm(sol.fun)
+      rx1_max = jnp.max(sol.fun)
       v = ainsrt2(sol.x, ni_in, v_in, ni_out, 0)[0:-1]
-      i_in = - sum_node_I(v, A, w, ni_in)
-      i_out = sum_node_I(v, A, w, ni_out)
+      i_in = - sum_node_I(v, A, ni_in, w, pinids, nlfun=nlfun)
+      i_out = sum_node_I(v, A, ni_out, w, pinids, nlfun=nlfun)
       KCL_err = jnp.ptp(jnp.array( (i_in, i_out, sol.x[-1]) ))
-      db_print(854, i_in, i_out, sol.x[-1], rx1)
+      db_print(854, i_in, i_out, sol.x[-1], rx1, rx1_max)
       err = max(KCL_err, rx1)
-      if opt["verbose"]:
+      if options["verbose"]:
         db_print(f"MLT step: Previous err={rxi:.8f}. New err={err:.8f}")
-      if err < ftol: #sol.x is already good enough
+      if err < final_ftol: #sol.x is already good enough
         return sol
       if err < rxi: #sol.x is better than the previous xi
         rxi = err
-        xi = sol.x
+        opt_i["xi"] = sol.x
   return sol
-
-def NL_Axb(A, b, w=1, xi=None, method="n-k", opt={}):
-  """OLD
-  Solve the equation rowsum( A.*sinh(wX) ) / w = b
-  When A is the Adjacency Matrix, this returns the voltage at each node
-    if I = k*sinh(wV) represents the I-V curve at each junction
-  Parameters
-  ----------
-    A (NxN scipy matrix) : the Adjacency Matrix of the RN
-    b (Nx1 np array) : the current vector
-    w (float) : the coefficient on the argument for sinh(wx)
-      This can be related to the 3rd derivative of the i-v curve at zero.
-    xi (Nx1 np array) : initial guess for the solution. If None, xi=0
-      Maybe providing this could speed it up a lot. Idk.
-    method ("n-k", "hybr") : the solution method 
-      (n-k and hybr are suggested, but there's also trf)
-    opt (dict) : solver options, to be passed on to the solver.
-      May include a "verbose" option.
-      "xtol" is important for hybr
-  
-  Returns
-  -------
-    x (np array) : the solution vector
-  """
-
-  if xi is None:
-    xi = np.zeros((A.shape[1], 1))
-  if "verbose" not in opt:
-    opt["verbose"] = debug
-  if type(opt["verbose"]) != int:
-    opt["verbose"] = 1 if opt["verbose"] else 0
-  if opt["verbose"] > 2:
-    db_print(f"Starting Nonlinear Solver: {method}")
-
-  if method == "n-k":
-    # Function used by N-K
-    def residual(x):
-      # Find the residual from the nonlinear verson of KCL
-      vcols, vrows = np.meshgrid(x, x)
-      sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-      Asinh = A.multiply(np.sinh(sinharg)).toarray() # A .* sinh()
-      sumI = Asinh.sum(1) / w # sum of currents leaving each node
-      return sumI - np.hstack(b)
-    #, iter=16000
-    # DOES THIS WORK?
-    # I think rdiff may need to be passed in a dictionary
-    sol = spo.root(residual, xi, method="krylov", verbose=opt["verbose"], rdiff=.05)
-
-  elif method in ("hybr", "trf"):
-    def res_jac(x):
-      # Returns the residual and the Jacobian for the given x
-      # Find the residual from the nonlinear verson of KCL
-      # See OneNote > Nonlinear system
-      #db_print(218, np.max(x), np.min(x))
-      vcols, vrows = np.meshgrid(x, x)
-      sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-      Asinh = A.multiply(np.sinh(sinharg)).toarray() # A .* sinh()
-      sumI = Asinh.sum(1) / w # sum of currents leaving each node
-      r = sumI - np.hstack(b)
-      # Now find the Jacobian (See OneNote > Jacobian of NL)
-      Acosh = A.multiply(np.cosh(sinharg)).toarray()
-      J = np.diag(Acosh.sum(1)) - Acosh
-      return r, J
-    if method == "hybr":
-      if "xtol" not in opt:
-        opt["xtol"] = 1e-3
-      # The only relevant option
-      hopt = {"xtol" : opt["xtol"]}
-      #nkw["maxfev"] = 1e6
-      sol = spo.root(res_jac, xi, method="hybr", jac=True, options=hopt)
-      #db_print(201, "nfev", sol.nfev)
-    elif method == "trf":
-      # "verbose" is a solver option for trf
-      if "ftol" not in opt:
-        opt["ftol"] = 1e-3
-      if "xtol" not in opt:
-        opt["xtol"] = 1e-3
-      if "gtol" not in opt:
-        opt["gtol"] = 1e-5
-      last_x = None
-      last_res = None
-      last_jac = None
-      # These functions only recalculate if needed
-      # This mimics how the spo.root function handels jac=True
-      def res(x):
-        nonlocal last_res
-        nonlocal last_jac
-        nonlocal last_x
-        if not np.all(x == last_x):
-          last_res, last_jac = res_jac(x)
-          last_x = x
-        return last_res
-      def jac(x):
-        nonlocal last_res
-        nonlocal last_jac
-        nonlocal last_x
-        if not np.all(x == last_x):
-          last_res, last_jac = res_jac(x)
-          last_x = x
-        return last_jac
-      xi = xi.flatten()
-      sol = spo.least_squares(res, xi, jac=jac, method="trf", **opt)
-
-  if opt["verbose"] > 1:
-    db_print(f"Solver message: {sol.message}")
-    #db_print("Done solving")
-  return sol.x
 
 def L_from_A(A):
   """Create a Laplacian from an Adjacency matrix
   """
-  D = sps.diags(np.array(A.sum(1).flatten())[0])
+  if sps.issparse(A):
+    D = sps.diags(np.array(A.sum(1)).squeeze())
+  else:
+    D = jnp.diag(A.sum(1))
   return D - A
 
 def L_sol(Lpl, v_in, ni_in, ni_out, method="cg", tol=1e-5):
@@ -1057,7 +1074,7 @@ def L_sol(Lpl, v_in, ni_in, ni_out, method="cg", tol=1e-5):
     if status != 1:
       db_print("Error: lsqr did not confidently find a good solution")
       db_print(f"Exit info: {str(RES[1:-1])}")
-      db_print("spsl.lsqr really shouldn't be used for this problem.")
+      #db_print("spsl.lsqr really shouldn't be used for this problem.")
     else:
       # Match with cg status success code
       status = 0
