@@ -817,6 +817,10 @@ class ResistorNetwork:
           p_max_n = self.G.nodes[en1]["p"]
           n_p_max = en1
       
+      #TEMP
+      #_, isnk = self.through_currents(ret_sink=True, store=True)
+      #util.sim_log(821, isnk)
+
       return (p_max_e, e_p_max), (p_max_n, n_p_max), Req
 
   def get_maxp_nodes(self, n=1, relative=True, eps_pf=0.01):

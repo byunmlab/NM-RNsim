@@ -630,6 +630,13 @@ def fwd_pass_sim(cp, rn):
     db_print(f"Sending in this input: {Ni}")
     toc(times)
     output, currents = rn.fwd_pass(Ni)
+    
+    #TEMP
+    #_, isnk = rn.through_currents(ret_sink=True, store=True)
+    #sim_log("std_simd:636", isnk)
+    #v = nx.get_node_attributes(rn.G, "v")
+    #sim_log("std_simd:637", v)
+    
     toc(times, f"Fwd pass with Ni={Ni} calculation")
     in_currents = rn.sum_currents(rn.in_pin_ids(N_in=Ni))
     current_err = np.sum(currents) + np.sum(in_currents)

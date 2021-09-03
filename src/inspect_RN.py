@@ -130,6 +130,7 @@ def inspect_RN(filename):
   if save_v:
     # Save the voltage stored at every node and save that to file
     v = nx.get_node_attributes(rn.G, "v")
+
     if len(v) == 0:
       print("The voltage has not been stored in this RN.")
     else:
@@ -143,6 +144,12 @@ def inspect_RN(filename):
 
   if save_i:
     # Save the current flowing through each node to file
+    # TODO: allow user to specify a config file instead
+    rn.res_w = 20
+    rn.sol_method = "mlt"
+    print("Warning: This will not work correctly unless the cls_config settings"
+      " for resistance are set correctly.")
+
     i_dict, s_dict = rn.through_currents(ret_sink=True, store=True)
     save_fname = trm_fname + "_i.csv"
     ifile = open(save_fname, "w")
