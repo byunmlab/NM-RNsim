@@ -1,5 +1,6 @@
 CURRENT TO DO:
 - Consider ||res|| as compared to the total current. If ||res|| > I/10, we're in trouble.
+  - This looks like it wants to be an iterative, adaptive method
 - Talk with Wingate
 - Finish RELU activation (random diodes)
 - Vary Vbp in the DOE
