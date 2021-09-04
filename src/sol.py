@@ -1,7 +1,7 @@
 """This script contains the functions related to solving the system
 
-  NL_I : Calculate nonlinear current
-  NL_P : Calculate nonlinear power
+  I : Calculate nonlinear current
+  P : Calculate nonlinear power
   NL_Axb : Solve the system sum( A.*sinh(wX) ) = b using a nonlinear solver
 
 """
@@ -10,6 +10,8 @@ import util
 from util import db_print
 from util import tic
 from util import toc
+import scipy.sparse as sps
+import scipy.sparse.linalg as spsl
 import scipy.optimize as spo
 import numpy as np
 import jax
@@ -21,24 +23,29 @@ iv_funs = ("L", "sinh", "relu")
 # List of supported nonlinear solver methods
 NL_methods = ("n-k", "hybr", "trf", "mlt", "custom", "optax-adam")
 
-def NL_I(vp, vn, params, ivfun="sinh"):
-  """Simple calculation of current in the nonlinear system.
+def I(vp, vn, params):
+  """Simple calculation of current between two nodes
   Parameters
   ----------
     vp: voltage at anode
     vn: voltage at cathode
     params (dict): Parameters for the current calculation.
+      ivfun (str) : Which function? (L, sinh or relu)
+      if ivfun==L:
+        params["G"]: conductivity (iv slope)
       if ivfun==sinh:
         params["G"]: conductivity (iv slope @v=0)
         params["w"]: the coefficient on the argument for sinh(wx)
       if ivfun==relu:
         params["G"]: conductivity (iv slope @v>0)
-    ivfun (str) : Which function? (sinh or relu)
   Returns
   -------
     i: Current. Positive current flows from anode to cathode by PSC
   """
-  if ivfun == "sinh":
+  ivfun = params["ivfun"]
+  if ivfun == "L":
+    return params["G"] * (vp-vn)
+  elif ivfun == "sinh":
     return params["G"]/params["w"] * np.sinh(params["w"]*(vp-vn))
   elif ivfun == "relu":
     i = params["G"]*(vp - vn)
@@ -51,24 +58,28 @@ def NL_I(vp, vn, params, ivfun="sinh"):
       # Exception for individual nodes to be non-relu
       is_on = 1
     return i * is_on
-def NL_P(vp, vn, params, ivfun="sinh"):
-  """Simple calculation of power (p=vi) in the nonlinear system.
+  else:
+    return "ERROR: unknown ivfun"
+def P(vp, vn, params):
+  """Simple calculation of power (p=vi)
   Parameters
   ----------
     vp: voltage at anode
     vn: voltage at cathode
     params (dict): Parameters for the current calculation.
+      ivfun (str) : Which function? (L, sinh or relu)
+      if ivfun==L:
+        params["G"]: conductivity (iv slope)
       if ivfun==sinh:
         params["G"]: conductivity (iv slope @v=0)
         params["w"]: the coefficient on the argument for sinh(wx)
       if ivfun==relu:
         params["G"]: conductivity (iv slope @v>0)
-    ivfun (str) : Which function? (sinh or relu)
   Returns
   -------
     p: Power.
   """
-  i = NL_I(vp, vn, params, ivfun=ivfun)
+  i = I(vp, vn, params)
   return (vp-vn)*i
 
 def sum_node_I(v, A, ni, w, pinids, ivfun="sinh"):
@@ -86,9 +97,10 @@ def sum_node_I(v, A, ni, w, pinids, ivfun="sinh"):
   params = {
     "G": A[ni,:],
     "w": w,
-    "pinids": pinids
+    "pinids": pinids,
+    "ivfun": ivfun
   }
-  i_in = NL_I(v, vn, params, ivfun=ivfun)
+  i_in = I(v, vn, params)
   return jnp.sum(i_in)
 
 def NL_res_j(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
@@ -159,27 +171,27 @@ def RNsol(params, options):
   """
 
   # Result object
-  def result(): pass
+  result = spo.OptimizeResult()
 
   v_in = params["v_in"]
   ni_in = params["ni_in"]
   ni_out = params["ni_out"]
   ivfun = params["ivfun"] if "ivfun" in params else "sinh"
   if ivfun not in iv_funs:
-    result.code = 1
+    result.status = 1
     result.msg = "Unknown ivfun"
     return result
 
   if ivfun == "L":
     # Linear system
     if options["method"] in NL_methods:
-      result.code = 1
+      result.status = 1
       result.msg = "Nonlinear method specified for linear ivfun"
       return result
     L = None
     if "L" not in params:
       if "A" not in params:
-        result.code = 1
+        result.status = 1
         result.msg = "Missing parameter or option: 'A' 'L'"
         return result
       params["L"] = L_from_A(params["A"])
@@ -188,13 +200,13 @@ def RNsol(params, options):
   else:
     # Nonlinear system
     if options["method"] not in NL_methods:
-      result.code = 1
+      result.status = 1
       result.msg = "options['method'] is not a valid nonlinear method"
       return result
     sol = NL_sol(params, options)
-    v = ainsrt(sol.x, [(ni_in, v_in), (ni_out, 0)])[0:-1]
+    v = util.ainsrt(sol.x, [(ni_in, v_in), (ni_out, 0)])[0:-1]
     v = np.array(v, dtype=np.float) #Convert back to np (float64)
-    I_in = x[-1]
+    I_in = sol.x[-1]
     I_in = np.float64(I_in) #Convert back to np
     if np.abs(I_in) < 1e-30:
       # Avoid divide by zero
@@ -209,7 +221,7 @@ def RNsol(params, options):
   result.v = v
   result.I_in = I_in
   result.Req = Req
-  result.code = status
+  result.status = status
   return result
 
 def NL_sol(params, options):
@@ -356,7 +368,7 @@ def NL_sol(params, options):
   toc(times, "res(xi)")
   if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
     # If xi is already within tolerance, we're done
-    def sol(): pass
+    sol = spo.OptimizeResult()
     sol.x = xi
     sol.fun = rxi
     return sol
@@ -502,7 +514,7 @@ def NL_adam(jlx, jgx, xi, options):
     params = optax.apply_updates(params, updates)
     it += 1
 
-  def sol(): pass
+  sol = spo.OptimizeResult()
   sol.x = params['x']
   sol.loss = jlx(sol.x)
   sol.grad = jgx(sol.x)
@@ -585,7 +597,7 @@ def NL_custom_N(res, jac, xi, options):
     nJs = jnp.linalg.norm( jnp.dot(J1, step) )
     db_print(f"At it#{it}/{maxit}, err={err}, ||step||={nstep},"# |J|={dJ},"
       f" ||J*step||={nJs}")
-  def sol(): pass
+  sol = spo.OptimizeResult()
   sol.x = xm
   sol.fun = rm
   sol.err = errm
@@ -783,10 +795,5 @@ def L_sol(params, options):
   voltage_mult = v_in / Req
   v *= voltage_mult
 
-  def sol(): pass
-  sol.v = v
-  sol.Req = Req
-  sol.status = status
-
-  return sol
+  return v, Req, status
 

@@ -16,9 +16,6 @@ import time
 import networkx as nx
 import numpy as np
 import pandas as pd
-import scipy.sparse as sps
-import scipy.sparse.linalg as spsl
-import scipy.optimize as spo # N-K
 import matplotlib.pyplot as plt
 
 import jax.numpy as jnp

@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import scipy.spatial as spl
 from scipy.stats import truncnorm as tnorm
 import util
+import sol
 import pickle
 import json
 import gzip
@@ -28,7 +29,7 @@ class ResistorNetwork:
   pin_res = 1e-6 #Resistance btw pins and the nodes they intersect with. It's an arbitrarily low resistance.
   res_k = 10000 #Coefficient multiplier for resistance calculation btw nodes
   res_w = 1 #Coefficient for argument of sinh in nonlinear sim. IE how steeply nonlinear.
-  ivfun = "sinh" #L, sinh, or relu for NL_sol
+  ivfun = "sinh" #L, sinh, or relu for sol.RNsol
   min_res = 1e-6 #Min resistance. Think of the resistance of the fiber itself, even if they're touching
   # Solution method: "spsolve", "splsqr", "cg". 
   #   splsqr is not a good idea because the matrix is symmetric, 
@@ -751,7 +752,6 @@ class ResistorNetwork:
       Lpl = nx.linalg.laplacian_matrix(self.G, weight="cnd",
         nodelist=self.node_list)
       params["L"] = Lpl
-      #v, Req, code = util.L_sol(Lpl, v_in, n0i, n1i, method=self.sol_method)
     else:
       # Adjacency Matrix for conductance is used instead of the Laplacian
       #   when solving the nonlinear problem.
@@ -760,7 +760,8 @@ class ResistorNetwork:
       params["A"] = Adj
     
     result = sol.RNsol(params, options)
-    # TODO: Take note of if it succeeded or not, using result.code
+    if result.status != 0:
+      util.db_print("The solver ended with status code:", result.status)
     if hasattr(result, "msg"):
       util.db_print(result.msg)
     v = result.v
@@ -799,16 +800,13 @@ class ResistorNetwork:
         G = edge[2]["cnd"]
         params = {
           "G": G,
-          "w": self.res_w
+          "w": self.res_w,
+          "ivfun": self.ivfun
         }
         
         # Calculate & save current
         if set_i:
-          if self.sol_method in util.NL_methods:
-            # TODO
-            i = util.NL_I(vp, vn, params, ivfun=self.ivfun)
-          else:
-            i = G * (vp - vn)
+          i = sol.I(vp, vn, params)
           self.G[en0][en1]["i"] = abs(i)
           self.G.nodes[en0]["i"] += abs(i)
           self.G.nodes[en1]["i"] += abs(i)
@@ -816,14 +814,9 @@ class ResistorNetwork:
           self.G.nodes[en1]["isnk"] += i
         
         # Calculate edge power
-        if self.sol_method in util.NL_methods:
-          p = util.NL_P(vp, vn, params, ivfun=self.ivfun)
-        else:
-          p = G * (vp-vn)**2
+        p = sol.P(vp, vn, params)
         # Save this edge power value
         self.G[en0][en1]["p"] = p
-        # Save the square of power (could be used for plot line thickness)
-        self.G[en0][en1]["p2"] = p**2
         # Add this power to both of the nodes on the edge
         # Note: I don't know how much sense this makes in reality...
         self.G.nodes[en0]["p"] += p
@@ -1561,7 +1554,7 @@ class ResistorNetwork:
     [sinking] (digt) : the current being absorbed / sinked by each node.
       Only returned if ret_sink == True
     """
-    nonlinear = self.sol_method in util.NL_methods
+    nonlinear = self.sol_method in sol.NL_methods
     voltages = nx.get_node_attributes(self.G, "v")
     if len(voltages) == 0:
       util.db_print("Warning: voltage has not been stored in this RN.")
@@ -1590,16 +1583,14 @@ class ResistorNetwork:
       vp = voltages[en0]
       vn = voltages[en1]
       G = edge[2]["cnd"]
-      if nonlinear:
-        params = {
-          "G": G,
-          "w": self.res_w,
-          #"pinids": tuple([self.key_to_index(pin) for pin in self.pin_keys]),
-          "not_relu": (en0 in self.pin_keys) or (en1 in self.pin_keys)
-        }
-        i = util.NL_I(vp, vn, params, ivfun=self.ivfun)
-      else:
-        i = G * (vp-vn)
+      params = {
+        "G": G,
+        "w": self.res_w,
+        #"pinids": tuple([self.key_to_index(pin) for pin in self.pin_keys]),
+        "not_relu": (en0 in self.pin_keys) or (en1 in self.pin_keys),
+        "ivfun": self.ivfun
+      }
+      i = sol.I(vp, vn, params)
       # Only worry about the nodes in the list
       if en0 in currents:
         currents[en0] += abs(i)
