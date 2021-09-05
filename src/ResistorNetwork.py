@@ -762,8 +762,8 @@ class ResistorNetwork:
     result = sol.RNsol(params, options)
     if result.status != 0:
       util.db_print("The solver ended with status code:", result.status)
-    if hasattr(result, "msg"):
-      util.db_print(result.msg)
+    if hasattr(result, "message"):
+      util.db_print(result.message)
     v = result.v
     I_in = result.I_in
     Req = result.Req

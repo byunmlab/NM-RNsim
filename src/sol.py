@@ -21,7 +21,7 @@ import optax
 # List of supported i-v curve functions
 iv_funs = ("L", "sinh", "relu")
 # List of supported nonlinear solver methods
-NL_methods = ("n-k", "hybr", "trf", "mlt", "custom", "optax-adam")
+NL_methods = ("n-k", "hybr", "trf", "mlt", "adpt", "custom", "optax-adam")
 
 def I(vp, vn, params):
   """Simple calculation of current between two nodes
@@ -167,7 +167,7 @@ def RNsol(params, options):
       result.code (int) : Success code.
         0: Success
         1: Invalid call to RNsol
-      result.msg (str) : code message
+      result.message (str) : code message
   """
 
   # Result object
@@ -179,20 +179,20 @@ def RNsol(params, options):
   ivfun = params["ivfun"] if "ivfun" in params else "sinh"
   if ivfun not in iv_funs:
     result.status = 1
-    result.msg = "Unknown ivfun"
+    result.message = "Unknown ivfun"
     return result
 
   if ivfun == "L":
     # Linear system
     if options["method"] in NL_methods:
       result.status = 1
-      result.msg = "Nonlinear method specified for linear ivfun"
+      result.message = "Nonlinear method specified for linear ivfun"
       return result
     L = None
     if "L" not in params:
       if "A" not in params:
         result.status = 1
-        result.msg = "Missing parameter or option: 'A' 'L'"
+        result.message = "Missing parameter or option: 'A' 'L'"
         return result
       params["L"] = L_from_A(params["A"])
     v, Req, status = L_sol(params, options)
@@ -201,7 +201,7 @@ def RNsol(params, options):
     # Nonlinear system
     if options["method"] not in NL_methods:
       result.status = 1
-      result.msg = "options['method'] is not a valid nonlinear method"
+      result.message = "options['method'] is not a valid nonlinear method"
       return result
     sol = NL_sol(params, options)
     v = util.ainsrt(sol.x, [(ni_in, v_in), (ni_out, 0)])[0:-1]
@@ -365,15 +365,21 @@ def NL_sol(params, options):
   #toc(times, "jit")
   rxi = res(xi)
   db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}")
-  toc(times, "res(xi)")
+  toc(times)#, "res(xi)")
   if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
     # If xi is already within tolerance, we're done
     sol = spo.OptimizeResult()
     sol.x = xi
     sol.fun = rxi
+    sol.status = 0
+    sol.nfev = 1
+    sol.message = "The linear model was sufficient in this case"
     return sol
 
-  if method == "mlt":
+  if method == "adpt":
+    sol = NL_adpt(fprms, fopt)
+
+  elif method == "mlt":
     # Chain multiple solvers
     #ltol = 5e-3
     xtol = options["xtol"] if "xtol" in options else 1e-5
@@ -463,12 +469,14 @@ def NL_sol(params, options):
     #   "verbose" is an option in least_squares {0,1,2}
     trf_opt = {
       "bounds": bounds,
-      "x_scale": "jac" # IDK about this...
+      "x_scale": "jac", # IDK about this...
     }
     # Scale the variable for current so it's more significant
     #opt["x_scale"] = np.ones(N)
     #opt["x_scale"] = N/10
     trf_opt["verbose"] = options["verbose"] if "verbose" in options else 0
+    if "xtol" in options:
+      trf_opt["xtol"] = options["xtol"]
     if "tol" in options:
       trf_opt["xtol"] = options["tol"]
     if "xtol" not in trf_opt:
@@ -479,9 +487,9 @@ def NL_sol(params, options):
     trf_opt["ftol"] = .5 * trf_opt["ftol"]**2 * 10 # *10 arbitrary
     trf_opt["gtol"] = options["gtol"] if "gtol" in options else 1e-10
     # Make sure xi is feasible
-    db_print(617, len(xi[xi<0]))
+    #db_print(617, len(xi[xi<0]))
     xi = xi.at[xi<0].set(0)
-    db_print(619, len(xi[xi>v_in]))
+    #db_print(619, len(xi[xi>v_in]))
     Ii = xi[-1]
     xi = xi.at[xi>v_in].set(v_in)
     xi = xi.at[-1].set(Ii) # x[-1] has no upper bound
@@ -607,43 +615,75 @@ def NL_custom_N(res, jac, xi, options):
   sol.success = True # TMP
   return sol
 
-def NL_adpt(A, params, v_in, ni_in, ni_out, xi, ftol, opt, rxi=None):
-  """Adaptive method that keeps trying more careful solvers until
-  it reaches ftol. Also considers KCL error.
-    The following two values must be < ftol
-      - ||res||
-      - ptp(i_out, i_in, x[-1]) -- This represents KCL error as well as how
-        accurate the current variable x[-1] is
-  NOT FINISHED, NOT USED. I'll probably stick with NL_mlt
+def NL_adpt(params, options):
+  """Adaptive method that keeps trying more careful solvers
+  This is the procedure which ends whenever err is small enough
+    1. Start with hybr and xtol=1e-2
+    2. Decrease xtol by 10x until it's no longer improving
+    3. Switch to trf
+    4. Decrease xtol by 10x until reaching 1e-12
+  Aggregate error: err = max(||res||, ptp(i_out, i_in, x[-1]))
+    This represents KCL error at each node as well as for the whole RN
+    It also checks that x[-1] should be I
+  Termination condition: err < x[-1] * ftol
+    This way, if I=0.001A, the acceptable error is smaller than if I=10A
   """
 
-  ivfun = opt["ivfun"] if "ivfun" in opt else "sinh"
-  if rxi is None:
-    # Initial r
-    rxi = np.linalg.norm(NL_res_j(xi, A, params["w"], params["pinids"], v_in, ni_in, ni_out, ivfun))
-  method = "hybr" # Fastest, but less reliable sometimes
-  tol = 10*ftol
-  opt["tol"] = tol
-  while True:
-    if opt["verbose"]:
-      db_print(783, f"Running method {method} with tol={tol}")
-    sol = NL_sol(A, params, v_in, ni_in, ni_out, xi=xi, method=method, opt=opt)
-    if opt["verbose"]:
-      db_print(582, sol.message, sol.nfev)#, sol.x[-8:])
-    # See if sol is an improvement and if it's good enough alredy
-    if not sol.success:
-      db_print("Warning: the solver did not converge")
-      # I may still want to use the result if it's better than before
-    #if sol.success:
-    rx1 = np.linalg.norm(sol.fun)
-    if opt["verbose"]:
-      db_print(f"ADPT step: Previous r={rxi:.8f}. New r={rx1:.8f}")
-    if rx1 < ftol: #sol.x is already good enough
-      return sol
-    if rx1 < rxi: #sol.x is better than the previous xi
-      rxi = rx1
-      xi = sol.x
-  # NOT FINISHED
+  A = params["A"]
+  w = params["w"]
+  pinids = params["pinids"]
+  v_in = params["v_in"]
+  ni_in = params["ni_in"]
+  ni_out = params["ni_out"]
+  ivfun = params["ivfun"]
+  xi = options["xi"]
+  ftol = options["ftol"] if "ftol" in options else 1e-2
+  opt_i = options.copy()
+
+  i = 0
+  I = xi[-1]
+  tol = 1e-2
+  mtd = "hybr" # Start with hybr, then go to trf if hybr doesn't improve
+
+  # Initial r
+  err = np.linalg.norm(NL_res_j(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
+  while err > I * ftol:
+    if options["verbose"]:
+      db_print(f"Running adaptive solver step {i}: method {mtd}, tol={tol}")
+    opt_i["xtol"] = tol
+    opt_i["method"] = mtd
+    sol = NL_sol(params, opt_i)
+    if options["verbose"]:
+      db_print(f"\tNL_sol (nfev={sol.nfev}) message: {sol.message}")
+    I = sol.x[-1]
+    res = jnp.linalg.norm(sol.fun)
+    v = util.ainsrt2(sol.x, ni_in, v_in, ni_out, 0)[0:-1]
+    i_in = - sum_node_I(v, A, ni_in, w, pinids, ivfun=ivfun)
+    i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
+    ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
+    newerr = max(res, ierr)
+    db_print(f"\tError={newerr}, stopping err={I*ftol}")
+    # Set things up for the next round
+    if newerr < err:
+      # This x is better than the previous x
+      err = newerr
+      opt_i["xi"] = sol.x
+    else:
+      db_print("\tThis adpt step did not reduce the error")
+      if mtd == "hybr":
+        mtd = "trf"
+      elif tol < 1e-12:
+        db_print("Quitting Adaptive solver unsuccessfully")
+        break
+    i += 1
+    if mtd == "hybr" and not sol.success:
+      mtd = "trf"
+    elif tol > 1e-16: # No need to reduce tolerance if we're switching methods
+      tol /= 10
+    else:
+      db_print("Quitting Adaptive solver unsuccessfully")
+      break
+  # TODO: Deal with when it found a local minimum.
   return sol
 
 def NL_mlt(params, options, methods, final_ftol):
