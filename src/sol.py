@@ -23,6 +23,55 @@ iv_funs = ("L", "sinh", "relu")
 # List of supported nonlinear solver methods
 NL_methods = ("n-k", "hybr", "trf", "mlt", "adpt", "custom", "optax-adam")
 
+class RNOptRes(spo.OptimizeResult):
+  """The object returned by RNsol
+  This object must have:
+    status
+    v
+    I_in
+    Req
+    nfev
+  It may also have:
+    x
+    message
+    Any other attribute of spo.OptimizeResult
+  If initialized with x, v_in, ni_in, & ni_out, this is sufficient
+  """
+  def __init__(self, x=None, v=None, status=-999, message=None, nfev=-1,
+    I_in=None, Req=None, v_in=None, ni_in=None, ni_out=None):
+    """Constructor
+    """
+    super().__init__()
+    self.nfev = nfev
+    self.status = status
+    if x is not None:
+      self.x = x
+      if (v_in is not None and ni_in is not None and ni_out is not None):
+        set_xvIR(self, x, v_in, ni_in, ni_out)
+    if v is not None:
+      self.v = v
+    if I_in is not None:
+      self.I_in = I_in
+    if Req is not None:
+      self.Req = Req
+    if message is not None:
+      self.message = message
+
+def set_xvIR(RNOR, x, v_in, ni_in, ni_out):
+  """ Helper method for RNOptRes objects
+  This isn't inside the RNOptRes class because of the dict attributes thing.
+  """
+  RNOR.x = x
+  RNOR.v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
+  RNOR.v = np.array(RNOR.v, dtype=np.float)
+  I_in = x[-1]
+  if np.abs(I_in) < 1e-30:
+    Req = 1e30
+  else:
+    Req = v_in / I_in
+  RNOR.I_in = I_in
+  RNOR.Req = Req
+
 def I(vp, vn, params):
   """Simple calculation of current between two nodes
   Parameters
@@ -171,7 +220,7 @@ def RNsol(params, options):
   """
 
   # Result object
-  result = spo.OptimizeResult()
+  result = RNOptRes()
 
   v_in = params["v_in"]
   ni_in = params["ni_in"]
@@ -196,7 +245,10 @@ def RNsol(params, options):
         return result
       params["L"] = L_from_A(params["A"])
     v, Req, status = L_sol(params, options)
-    I_in = v_in / Req
+    result.v = v
+    result.I_in = v_in / Req
+    result.Req = Req
+    result.status = status
   else:
     # Nonlinear system
     if options["method"] not in NL_methods:
@@ -204,24 +256,20 @@ def RNsol(params, options):
       result.message = "options['method'] is not a valid nonlinear method"
       return result
     sol = NL_sol(params, options)
-    v = util.ainsrt(sol.x, [(ni_in, v_in), (ni_out, 0)])[0:-1]
-    v = np.array(v, dtype=np.float) #Convert back to np (float64)
-    I_in = sol.x[-1]
-    I_in = np.float64(I_in) #Convert back to np
-    if np.abs(I_in) < 1e-30:
-      # Avoid divide by zero
-      Req = 1e30 #TMP
-    else:
-      Req = v_in / I_in
-    status = sol.status if hasattr(sol, "status") else 0
+    set_xvIR(result, sol.x, v_in, ni_in, ni_out)
+    #v = util.ainsrt(sol.x, [(ni_in, v_in), (ni_out, 0)])[0:-1]
+    #v = np.array(v, dtype=np.float) #Convert back to np (float64)
+    #I_in = sol.x[-1]
+    #I_in = np.float64(I_in) #Convert back to np
+    #if np.abs(I_in) < 1e-30:
+    #  # Avoid divide by zero
+    #  Req = 1e30 #TMP
+    #else:
+    #  Req = v_in / I_in
+    result.status = sol.status if hasattr(sol, "status") else 0
 
   util.sim_log("166 RNsol: v[in], v[out], I_in, Req: ", 
-    v[ni_in], v[ni_out], I_in, Req)
-  # Fill result object
-  result.v = v
-  result.I_in = I_in
-  result.Req = Req
-  result.status = status
+    result.v[ni_in], result.v[ni_out], result.I_in, result.Req)
   return result
 
 def NL_sol(params, options):
@@ -368,11 +416,8 @@ def NL_sol(params, options):
   toc(times)#, "res(xi)")
   if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
     # If xi is already within tolerance, we're done
-    sol = spo.OptimizeResult()
-    sol.x = xi
+    sol = RNOptRes(x=xi, status=0, nfev=1)
     sol.fun = rxi
-    sol.status = 0
-    sol.nfev = 1
     sol.message = "The linear model was sufficient in this case"
     return sol
 
@@ -522,7 +567,7 @@ def NL_adam(jlx, jgx, xi, options):
     params = optax.apply_updates(params, updates)
     it += 1
 
-  sol = spo.OptimizeResult()
+  sol = RNOptRes()
   sol.x = params['x']
   sol.loss = jlx(sol.x)
   sol.grad = jgx(sol.x)
@@ -605,7 +650,7 @@ def NL_custom_N(res, jac, xi, options):
     nJs = jnp.linalg.norm( jnp.dot(J1, step) )
     db_print(f"At it#{it}/{maxit}, err={err}, ||step||={nstep},"# |J|={dJ},"
       f" ||J*step||={nJs}")
-  sol = spo.OptimizeResult()
+  sol = RNOptRes()
   sol.x = xm
   sol.fun = rm
   sol.err = errm
@@ -640,6 +685,9 @@ def NL_adpt(params, options):
   ftol = options["ftol"] if "ftol" in options else 1e-2
   opt_i = options.copy()
 
+  # Set up initial sol
+  sol = RNOptRes(xi, v_in=v_in, ni_in=ni_in, ni_out=ni_out)
+
   i = 0
   I = xi[-1]
   tol = 1e-2
@@ -655,9 +703,10 @@ def NL_adpt(params, options):
     sol = NL_sol(params, opt_i)
     if options["verbose"]:
       db_print(f"\tNL_sol (nfev={sol.nfev}) message: {sol.message}")
-    I = sol.x[-1]
     res = jnp.linalg.norm(sol.fun)
-    v = util.ainsrt2(sol.x, ni_in, v_in, ni_out, 0)[0:-1]
+    set_xvIR(sol, sol.x, v_in, ni_in, ni_out)
+    I = sol.I_in
+    v = sol.v
     i_in = - sum_node_I(v, A, ni_in, w, pinids, ivfun=ivfun)
     i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
     ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
