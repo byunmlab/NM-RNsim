@@ -3,82 +3,50 @@
 import sys
 sys.path.append("/home/jblack/NMLAB/NMLab/src")
 
+import pandas as pd
 import time
 import multiprocessing as mp
 
 import main
 
 # Constants
-main_id = "DOE_"
-max_processes = 48
+options_file = "options_list.csv"
+max_processes = 50 #48
 V = 25
 N = 500
 bpm0 = .02
 
-"""
-IVs for DOE		Low	Med	High	Description
-- ks			1.4	1.6	1.8	Sparsity
-- fl_mu_0		0.1	0.3	0.5	Long fiber length
-- fl_mu_ratio		2	6	10	Ratio of long to short fiber length
-- ftype_proportions[0]	0.1	0.3	0.5	Fraction of fibers that are long
-- bpwr_mu_ratio		1	2	3	Burn power of long to short fibers
-- preburn fraction	.002	.006	.010	What fraction of the RN to preburn
-- burn_fibers		F		T	Whether to remove fibers or junctions
-"""
-
-# Values for the IVs
-v_ks = [1.4, 1.6, 1.8]
-v_flm0 = [0.1, 0.3, 0.5]
-v_flmr = [2, 6, 10]
-v_ftpr = [0.1, 0.3, 0.5]
-v_bpmr = [1, 2, 3]
-v_pbfr = [.002, .006, .010]
-v_bf = [False, True]
-
-options_file = open("options_list.csv", "w")
-header_line = "SIM_ID,ks,fl_mu_0,fl_mu_ratio,ftype_proportions_0,"
-header_line += "bpwr_mu_ratio,preburn_fraction,burn_fibers"
-options_file.write(header_line)
-# Create list of options
+# Read in the list of simulations to be run
+options_df = pd.read_csv(options_file)
 options_list = []
-for i_ks in range(len(v_ks)):
-  for i_flm0 in range(len(v_flm0)):
-    for i_flmr in range(len(v_flmr)):
-      for i_ftpr in range(len(v_ftpr)):
-        for i_bpmr in range(len(v_bpmr)):
-          for i_pbfr in range(len(v_pbfr)):
-            for i_bf in range(len(v_bf)):
-              l_is = [i_ks, i_flm0, i_flmr, i_ftpr, i_bpmr, i_pbfr, i_bf]
-              sim_id = main_id + "".join([str(i) for i in l_is])
-              ks = v_ks[i_ks]
-              # For compatability, this has 2*, but it probably shouldn't
-              cnd_len = 2 * (V/N)**(1/3) / ks
-              flm0 = v_flm0[i_flm0]
-              flmr = v_flmr[i_flmr]
-              fl_mus = [flm0, flm0/flmr]
-              ftp0 = v_ftpr[i_ftpr]
-              ftype_proportions = [ftp0, 1-ftp0]
-              bpmr = v_bpmr[i_bpmr]
-              bpwr_mus = [bpm0, bpm0/bpmr]
-              pbfr = v_pbfr[i_pbfr]
-              bf = v_bf[i_bf]
-              options_list.append({
-                "id": sim_id,
-                "cnd_len": str(cnd_len),
-                "fl_mus": str(fl_mus)[1:-1],
-                "ftype_proportions": str(ftype_proportions)[1:-1],
-                "bpwr_mus": str(bpwr_mus)[1:-1],
-                "preburn_fraction": str(pbfr),
-                "burn_fibers": str(bf)
-              })
-              # Also write a line to the options_list file
-              line = sim_id + "," + str(ks) + "," + str(flm0) + "," + str(flmr)
-              line += "," + str(ftp0) + "," + str(bpmr) + "," + str(pbfr)
-              line += "," + str(bf) + "\n"
-              options_file.write(line)
+for row in options_df.iterrows():
+  row = row[1]
+  flm0 = row["fl_mu_0"]
+  flmr = row["fl_mu_ratio"]
+  fl_mus = str([flm0, flm0/flmr])[1:-1]
+  ftp0 = row["ftype_proportions_0"]
+  ft_prop = str([ftp0, 1-ftp0])[1:-1]
+  # For compatability, this has 2*, but it probably shouldn't
+  cnd_len = 2 * (V/N)**(1/3) / row["ks"]
+  ftp0 = row["ftype_proportions_0"]
+  ft_prop = str([ftp0, 1-ftp0])[1:-1]
+  bpmr = row["bpwr_mu_ratio"]
+  bpwr_mus = str([bpm0, bpm0/bpmr])[1:-1]
+  #bf = "True" if row["burn_fibers"] else "False"
+  options_list.append({
+    "id": row["SIM_ID"],
+    "cnd_len": str(cnd_len),
+    "fl_mus": fl_mus,
+    "ftype_proportions": ft_prop,
+    "bpwr_mus": bpwr_mus,
+    "preburn_fraction": row["preburn_fraction"],
+    "burn_fibers": row["burn_fibers"]
+  })
+
 
 def test(options):
-  print(options["id"])
+  #print(options["id"])
+  print(options)
 
 def run(options):
   try:
@@ -86,14 +54,40 @@ def run(options):
   except Exception as e:
     print("Error running sim #", options["id"], e)
 
+def q_run(q):
+  # Run a sim as long as there's a job in the queue
+  while not q.empty():
+    args = q.get()
+    #run(args)
+    test(args)
+
 def pool_mlt():
+  # Use mp.Pool to do the multiprocessing
   pool = mp.Pool(max_processes)
   #pool.map(test, options_list)
   #result = pool.map(main.main, options_list)
   #print(result)
   #pool.map(main.main, options_list)
+  #pool.map(test, options_list)
   pool.map(run, options_list)
 
+def q_mlt():
+  # Use a queue to do the multiprocessing
+  # Fill the queue
+  job_q = mp.Queue()
+  for job in options_list:
+    job_q.put(job)
+  # Create the processes
+  processes = [mp.Process(target=q_run, args=(job_q,)) 
+    for i in range(max_processes)]
+
+  # Start all of them
+  for p in processes:
+    p.start()
+  for p in processes:
+    p.join()
+  
 if __name__ == '__main__':
-  pool_mlt();
+  pool_mlt()
+  #q_mlt()
 
