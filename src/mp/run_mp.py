@@ -10,10 +10,10 @@ import multiprocessing as mp
 import main
 
 # Constants
-options_file = "options_list.csv"
-max_processes = 50 #48
+options_file = "options_list_T.csv"
+max_processes = 50
 V = 25
-N = 500
+N = 200
 bpm0 = .02
 
 # Read in the list of simulations to be run
@@ -39,8 +39,8 @@ for row in options_df.iterrows():
     "fl_mus": fl_mus,
     "ftype_proportions": ft_prop,
     "bpwr_mus": bpwr_mus,
-    "preburn_fraction": row["preburn_fraction"],
-    "burn_fibers": row["burn_fibers"]
+    "preburn_fraction": str(row["preburn_fraction"]),
+    "burn_fibers": str(row["burn_fibers"])
   })
 
 
@@ -58,8 +58,8 @@ def q_run(q):
   # Run a sim as long as there's a job in the queue
   while not q.empty():
     args = q.get()
-    #run(args)
-    test(args)
+    #test(args)
+    run(args)
 
 def pool_mlt():
   # Use mp.Pool to do the multiprocessing
@@ -88,6 +88,6 @@ def q_mlt():
     p.join()
   
 if __name__ == '__main__':
-  pool_mlt()
-  #q_mlt()
+  #pool_mlt()
+  q_mlt()
 
