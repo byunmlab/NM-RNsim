@@ -1,5 +1,6 @@
 CURRENT TO DO:
 - Talk with Wingate
+- Switch util_CPU over to sol_CPU
 - Test RELU activation (random diodes)
 - Vary Vbp in the DOE
 - Do some more tweaking of the solver
@@ -10,10 +11,10 @@ CURRENT TO DO:
     - This looks like it wants to be an iterative, adaptive method
 
 IN PROGRESS:
-- Running DOE3_trsts (tighter xtol & ftol)
 - Making RELU an option (each node is a diode)
 
 RECENTLY DONE:
+- Running DOE3_trsts (tighter xtol & ftol)
 - Trying to see why the residuals can be small while sinking current for some node is large. See DOE3_FP -- It was an error with inspect.py > FP
 - Analyze results of DOE_trsts
 - Analyze results of DOE2_trsts --> Not precise enough. Was giving inaccurate results

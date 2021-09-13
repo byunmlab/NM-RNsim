@@ -13,7 +13,7 @@ import main
 options_file = "options_list_T.csv"
 max_processes = 50
 V = 25
-N = 200
+N = 500
 bpm0 = .02
 
 # Read in the list of simulations to be run
