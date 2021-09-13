@@ -414,7 +414,8 @@ def NL_sol(params, options):
   rxi = res(xi)
   db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}")
   toc(times)#, "res(xi)")
-  if jnp.linalg.norm(rxi) < 1e-8: #TMP: replace with tol
+  if method != "adpt" and jnp.linalg.norm(rxi) < fopt["ftol"]: #1e-9:
+    # For adpt, ftol has a different meaning. TODO: use a different name?
     # If xi is already within tolerance, we're done
     sol = RNOptRes(x=xi, status=0, nfev=1)
     sol.fun = rxi
@@ -684,6 +685,7 @@ def NL_adpt(params, options):
   xi = options["xi"]
   ftol = options["ftol"] if "ftol" in options else 1e-2
   opt_i = options.copy()
+  opt_i["ftol"] = 1e-16 # We're using xtol
 
   # Set up initial sol
   sol = RNOptRes(xi, v_in=v_in, ni_in=ni_in, ni_out=ni_out)
