@@ -22,6 +22,8 @@ import optax
 iv_funs = ("L", "sinh", "relu")
 # List of supported nonlinear solver methods
 NL_methods = ("n-k", "hybr", "trf", "mlt", "adpt", "custom", "optax-adam")
+# Min tolerance. A little bigger than epsilon
+tol_min = 1e-15
 
 class RNOptRes(spo.OptimizeResult):
   """The object returned by RNsol
@@ -685,7 +687,7 @@ def NL_adpt(params, options):
   xi = options["xi"]
   ftol = options["ftol"] if "ftol" in options else 1e-2
   opt_i = options.copy()
-  opt_i["ftol"] = 1e-16 # We're using xtol
+  opt_i["ftol"] = tol_min # We're using xtol
 
   # Set up initial sol
   sol = RNOptRes(xi, v_in=v_in, ni_in=ni_in, ni_out=ni_out)
@@ -694,10 +696,12 @@ def NL_adpt(params, options):
   I = xi[-1]
   tol = 1e-2
   mtd = "hybr" # Start with hybr, then go to trf if hybr doesn't improve
+  # Stopping error scales with current (down to tol_min)
+  err_stop = max(I*ftol, tol_min)
 
   # Initial r
   err = np.linalg.norm(NL_res_j(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
-  while err > I * ftol:
+  while err > err_stop:
     if options["verbose"]:
       db_print(f"Running adaptive solver step {i}: method {mtd}, tol={tol}")
     opt_i["xtol"] = tol
@@ -713,7 +717,8 @@ def NL_adpt(params, options):
     i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
     ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
     newerr = max(res, ierr)
-    db_print(f"\tError={newerr}, stopping err={I*ftol}")
+    err_stop = max(I*ftol, tol_min)
+    db_print(f"\tError={newerr}, stopping err={err_stop}")
     # Set things up for the next round
     if newerr < err:
       # This x is better than the previous x
@@ -722,14 +727,16 @@ def NL_adpt(params, options):
     else:
       db_print("\tThis adpt step did not reduce the error")
       if mtd == "hybr":
-        mtd = "trf"
-      elif tol < 1e-12:
+        mtd = "trf" # Switch to trf
+        i += 1
+        continue
+      elif tol <= tol_min:
         db_print("Quitting Adaptive solver unsuccessfully")
         break
     i += 1
     if mtd == "hybr" and not sol.success:
       mtd = "trf"
-    elif tol > 1e-16: # No need to reduce tolerance if we're switching methods
+    elif tol > tol_min: # No need to reduce tolerance if we're switching methods
       tol /= 10
     else:
       db_print("Quitting Adaptive solver unsuccessfully")
