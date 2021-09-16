@@ -28,6 +28,7 @@ timing = False
 # Options relevant to the sim log file
 log_fname = "log_TEMP.txt"
 use_stdout = False
+log_indent = 0
 
 def str2arr(s):
   """Converts a comma-separated list of floats to a np.array.
@@ -75,6 +76,7 @@ def sim_log(*strings):
   """Record s in the sim log file
   """
   with open(log_fname, "a") as log_file:
+    log_file.write("\t"*log_indent)
     for s in strings:
       log_file.write(str(s) + " ")
     log_file.write("\n")

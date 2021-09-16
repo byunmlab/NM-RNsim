@@ -221,6 +221,11 @@ def RNsol(params, options):
       result.message (str) : code message
   """
 
+  # Starting message
+  if options["verbose"]:
+    db_print(f"Solving RN...")
+    util.log_indent += 1
+
   # Result object
   result = RNOptRes()
 
@@ -272,6 +277,9 @@ def RNsol(params, options):
 
   util.sim_log("166 RNsol: v[in], v[out], I_in, Req: ", 
     result.v[ni_in], result.v[ni_out], result.I_in, result.Req)
+  # Return to normal indent
+  if options["verbose"]:
+    util.log_indent -= 1
   return result
 
 def NL_sol(params, options):
@@ -708,7 +716,7 @@ def NL_adpt(params, options):
     opt_i["method"] = mtd
     sol = NL_sol(params, opt_i)
     if options["verbose"]:
-      db_print(f"\tNL_sol (nfev={sol.nfev}) message: {sol.message}")
+      db_print(f"NL_sol (nfev={sol.nfev}) message: {sol.message}")
     res = jnp.linalg.norm(sol.fun)
     set_xvIR(sol, sol.x, v_in, ni_in, ni_out)
     I = sol.I_in
@@ -718,14 +726,14 @@ def NL_adpt(params, options):
     ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
     newerr = max(res, ierr)
     err_stop = max(I*ftol, tol_min)
-    db_print(f"\tError={newerr}, stopping err={err_stop}")
+    db_print(f"Error={newerr}, stopping err={err_stop}")
     # Set things up for the next round
     if newerr < err:
       # This x is better than the previous x
       err = newerr
       opt_i["xi"] = sol.x
     else:
-      db_print("\tThis adpt step did not reduce the error")
+      db_print("This adpt step did not reduce the error")
       if mtd == "hybr":
         mtd = "trf" # Switch to trf
         i += 1

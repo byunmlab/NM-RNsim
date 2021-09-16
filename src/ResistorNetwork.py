@@ -727,7 +727,7 @@ class ResistorNetwork:
       (if set_p) (p_max_n, n_p_max) : (the max node power, the corrosponding node)
     """
     
-    vrb = 2#TMP
+    vrb = 1#TMP
     # Find the indices of the pins used
     n0i = self.key_to_index(n0)
     n1i = self.key_to_index(n1)
