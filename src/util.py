@@ -67,6 +67,7 @@ def ainsrt2(x, i0, v0, i1, v1):
   Like ainsrt, but specifically for inserting 2 values and compatible with jit.
   """
   N = x.size+2
+  # TODO: NOT OPTIMIZED
   x01 = jnp.concatenate([ x[0:i0], v0, x[i0:i1-1], v1, x[i1-1:] ], axis=None)[0:N]
   x10 = jnp.concatenate([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ], axis=None)[0:N]
   # Essentially it's an if statement here

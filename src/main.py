@@ -9,9 +9,10 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = threads
 os.environ["NUMEXPR_NUM_THREADS"] = threads
 # jax options
 os.environ["JAX_ENABLE_X64"] = "True"
-#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
 # Results in 666MB allocated, at least for the first process
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".011"
+#   --> about right for N=500
+#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".011"
 
 # Standard modules
 from argparse import ArgumentParser as ArPr

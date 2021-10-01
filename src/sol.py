@@ -158,8 +158,9 @@ def NL_res_j(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
   """NL_res, but compatible with jit.
   Also take note of the changed order of arguments
   """
-  N = x.size + 2
+  N = x.size + 1
   v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
+  #db_print(163, jnp.max(v), jnp.min(v))
   vcols, vrows = jnp.meshgrid(v, v)
   if fun == "sinh":
     sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
@@ -185,6 +186,12 @@ def NL_res_j(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
     sumI = jnp.multiply(G, V).sum(1)
   res = sumI.at[ni_in].add(- x[-1])
   res = res.at[ni_out].add(x[-1])
+  # Add a term for error for impossible voltages
+  #res = jnp.concatenate([res, 10*(x[0:-1]-v_in/2)*jnp.logical_or(
+  #  x[0:-1]>v_in, x[0:-1]<0)])
+  #res = res.at[0].add(jnp.sum([res, 10*(x[0:-1]-v_in/2)*jnp.logical_or(
+  #  x[0:-1]>v_in, x[0:-1]<0)])) # not a good way.
+  res = jnp.nan_to_num(res, nan=1e10, posinf=1e15, neginf=-1e15)
   return res#[1:] # Throw one equation out (the first one)
 
 def RNsol(params, options):
@@ -352,55 +359,7 @@ def NL_sol(params, options):
     verbose = int(bool(verbose))
 
   # Come up with a good xi if needed
-  if xi is None:
-    xi = jnp.zeros(N).at[ni_in].set(v_in)
-  elif isinstance(xi, str):
-    assert xi[0] == "L", "483: Unknown xi option"
-    # Get xi from the linear system, solving with cg
-    L = L_from_A(params["A"]) # Use the sps version. Makes this a little fragile
-    params_L = {
-      # Use the sps version. Makes this a little fragile
-      "L": L_from_A(params["A"]),
-      "v_in": v_in,
-      "ni_in": ni_in,
-      "ni_out": ni_out
-    }
-    options_L = {
-      "ftol": 1e-7
-    }
-    vL, RL, status = L_sol(params_L, options_L)
-    xL = np.append(vL, v_in / RL) # convert v to x
-    xL = np.delete(xL, [ni_in, ni_out])
-    toc(times, "Lcg")
-    if xi == "Lcg":
-      xi = jnp.array(xL)
-    else:
-      # Presolving with smaller w. Format: "L_method_N"
-      xi_parts = xi.split("_") 
-      xi = jnp.array(xL)
-      N_pre = int(xi_parts[2])
-      ximethod = xi_parts[1]
-      assert ximethod in NL_methods
-      # Make N_pre simpler versions of the system to solve
-      for i in range(N_pre):
-        wi = w * ( (i+1)/(N_pre+1) )**2
-        params_i = fprms.copy()
-        params_i["w"] = wi
-        options_i = {
-          "xi": xi,
-          "method": ximethod,
-          "xtol": options["xtol"] if "xtol" in options else 1e-7,
-          "ftol": options["ftol"] if "ftol" in options else 1e-6
-        }
-        soli = NL_sol(params_i, options_i)
-        #soli = NL_sol(A, params, v_in, ni_in, ni_out, xi=xi, method=ximethod, 
-        #  options={"ftol":5e-5})
-        #db_print(soli.__dict__)
-        xi = soli.x
-      db_print(503, "Done with presolving")
-      toc(times, f"xi presolving, method={ximethod}")
-  else:
-    xi = jnp.array(xi)
+  xi = gen_xi(fprms, params["A"], options, times)
 
   fopt = {} # Filtered options
   fopt["xi"] = xi
@@ -705,7 +664,8 @@ def NL_adpt(params, options):
   tol = 1e-2
   mtd = "hybr" # Start with hybr, then go to trf if hybr doesn't improve
   # Stopping error scales with current (down to tol_min)
-  err_stop = max(I*ftol, tol_min)
+  # Divide by 2 initially to reflect uncertainty about I
+  err_stop = max(I/2*ftol, tol_min)
 
   # Initial r
   err = np.linalg.norm(NL_res_j(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
@@ -815,6 +775,90 @@ def NL_mlt(params, options, methods, final_ftol):
         rxi = err
         opt_i["xi"] = sol.x
   return sol
+
+def gen_xi(fprms, Asp, options, times):
+  """Generate a good initial guess for x
+  Parameters
+  ----------
+    xi (None, str, or N+1 np array) : initial guess for the solution.
+      If None, xi=0 (except at ni_in, where it's v_in)
+      If "Lcg", then find an xi by solving the linear system with cg
+      If "L_{nonlin_method}_{N} then solve sequentially for better xi-s
+        by gradually increasing the nonlinearity N times. (for SINH)
+      If N+1 np array, just convert it to a jnp array
+    fprms: Parameters from NL_sol
+    Asp: Sparse Adjacency Matrix
+    options: Options from NL_sol
+  Returns
+  -------
+    xi (jnp array) : improved initial guess for the solution
+  """
+
+  v_in = fprms["v_in"]
+  w = fprms["w"]
+  ni_in = fprms["ni_in"]
+  ni_out = fprms["ni_out"]
+  xi = options["xi"]
+  
+  if xi is None:
+    # The x vector should be 1 shorter than the v vector
+    N = Asp.shape[0]-1 # Asp is a scipy sparse matrix
+    xi = jnp.zeros(N) #.at[ni_in].set(v_in)
+  elif isinstance(xi, str):
+    assert xi[0] == "L", "483: Unknown xi option"
+    # Log message & increase indent
+    db_print(f"Pre-solving to find a good xi...")
+    util.log_indent += 1
+    
+    # Get xi from the linear system, solving with cg
+    L = L_from_A(Asp) # Use the sps version. Makes this a little fragile
+    params_L = {
+      # Use the sps version. Makes this a little fragile
+      "L": L_from_A(Asp),
+      "v_in": v_in,
+      "ni_in": ni_in,
+      "ni_out": ni_out
+    }
+    options_L = {
+      "ftol": 1e-7
+    }
+    vL, RL, status = L_sol(params_L, options_L)
+    xL = np.append(vL, v_in / RL) # convert v to x
+    xL = np.delete(xL, [ni_in, ni_out])
+    toc(times, "Lcg")
+    if xi == "Lcg":
+      xi = jnp.array(xL)
+    else:
+      # Presolving with smaller w. Format: "L_method_N"
+      xi_parts = xi.split("_") 
+      xi = jnp.array(xL)
+      N_pre = int(xi_parts[2])
+      ximethod = xi_parts[1]
+      assert ximethod in NL_methods
+      # Make N_pre simpler versions of the system to solve
+      for i in range(N_pre):
+        #wi = (i+1)/(N_pre+1) * w # Linear ramp
+        wi = w * ( (i+1)/(N_pre+1) )**2 # Quadratic ramp
+        db_print(f"Pre-solving with w={wi}")
+        params_i = fprms.copy()
+        params_i["w"] = wi
+        options_i = {
+          "xi": xi,
+          "method": ximethod,
+          "xtol": options["xtol"] if "xtol" in options else 1e-6,
+          "ftol": options["ftol"] if "ftol" in options else 1e-4
+        }
+        soli = NL_sol(params_i, options_i)
+        #db_print(soli.__dict__)
+        xi = soli.x
+      db_print(503, "Done with presolving")
+      toc(times, f"xi presolving, method={ximethod}")
+    # Return to previous indentation level
+    util.log_indent -= 1
+  else:
+    xi = jnp.array(xi)
+  # DONE
+  return xi
 
 def L_from_A(A):
   """Create a Laplacian from an Adjacency matrix

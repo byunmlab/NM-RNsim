@@ -35,6 +35,8 @@ class ResistorNetwork:
   #   splsqr is not a good idea because the matrix is symmetric, 
   #   and spsolve doesn't work if the graph has any isolated points
   sol_method = "cg"
+  # xi presolving method: None, Lcg, L_[mtd]_N
+  xi_method = "Lcg"
   # Stopping tolerance in x for nonlinear solvers.
   xtol = 1e-3
   ftol = 1e-3
@@ -171,6 +173,9 @@ class ResistorNetwork:
     cls.res_k = cp.getfloat("RN-res", "res_k")
     cls.min_res = cp.getfloat("RN-res", "min_res")
     cls.sol_method = cp.get("RN-res", "sol_method")
+    cls.xi_method = cp.get("RN-res", "xi_method")
+    if cls.xi_method == "None":
+      cls.xi_method = None
     cls.res_w = cp.getfloat("RN-res", "res_w")
     cls.ivfun = cp.get("RN-res", "ivfun")
     cls.xtol = cp.getfloat("RN-res", "xtol")
@@ -745,7 +750,7 @@ class ResistorNetwork:
       "verbose" : vrb,
       "xtol" : self.xtol,
       "ftol" : self.ftol,
-      "xi" : "Lcg"
+      "xi" : self.xi_method
     }
     if self.ivfun == "L":
       # Get the Laplacian matrix for conductance
