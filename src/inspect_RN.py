@@ -89,8 +89,23 @@ def inspect_RN(filename):
   if report_Ks:
     # Calculate and report two metrics of the sparsity
     V_rn = (rn.xmax-rn.xmin) * (rn.ymax-rn.ymin) * (rn.zmax-rn.zmin)
-    ks = 2*(V_rn / N)**(1/3) / rn.cnd_len
-    print(f"Coefficient of Sparsity k_s = {ks:6f}")
+    box_len = (V_rn / N)**(1/3) # cubed root of volume per fiber
+    # Find average fiber length
+    #fl_avg = np.dot(rn.fl_mus, rn.ftype_proportions)
+    fv = nx.get_node_attributes(rn.G, "fv")
+    fv = np.vstack(list(fv.values()))
+    fl = np.zeros( (fv.shape[0], 1) )
+    sumL = 0
+    for i, row in enumerate(fv):
+      sumL += np.linalg.norm(row)
+    fl_avg = sumL / fv.shape[0]
+    #ks = 2*(V_rn / N)**(1/3) / rn.cnd_len - OLD
+    old_ksc = 2*box_len / rn.cnd_len # I used to define ks like this
+    ksc = box_len / rn.cnd_len
+    ksf = box_len / fl_avg
+    print(f"Old Coefficient of Sparsity - Conduction Length k_sc = {old_ksc:6f}")
+    print(f"Coefficient of Sparsity - Conduction Length k_sc = {ksc:6f}")
+    print(f"Coefficient of Sparsity - Fiber Length k_sf = {ksf:6f}")
     EpN = E / N
     print(f"Edges per node = {EpN:6f}")
   if report_fl:
@@ -99,10 +114,8 @@ def inspect_RN(filename):
     # Note: the rn.fv attribute is probably wrong, since it wasn't saved in the json.
     #if hasattr(rn, "fv"):
     #  fv = rn.fv
-    #  print(117, fv.shape)
     fv = nx.get_node_attributes(rn.G, "fv")
     fv = np.vstack(list(fv.values()))
-    #print(120, fv.shape)
     fl = np.zeros( (fv.shape[0], 1) )
     for i, row in enumerate(fv):
       fl[i] = np.linalg.norm(row)
@@ -148,8 +161,9 @@ def inspect_RN(filename):
   if save_i:
     # Save the current flowing through each node to file
     # TODO: allow user to specify a config file instead
-    rn.res_w = 20
+    rn.res_w = 10
     rn.sol_method = "mlt"
+    rn.ivfun = "sinh"
     print("Warning: This will not work correctly unless the cls_config settings"
       " for resistance are set correctly.")
 

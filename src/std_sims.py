@@ -59,7 +59,7 @@ def res_sim(cp, rn):
   
   times = tic()
   if details:
-    *_, R = rn.apply_v(1, p0, p1, set_v=True, set_i=True)
+    *_, R = rn.apply_v(0.01, p0, p1, set_v=True, set_i=True)
     #in_currents = rn.sum_currents(rn.in_pin_ids(N_in=Ni))
     i0 = rn.node(p0)["isnk"]
     i1 = rn.node(p1)["isnk"]

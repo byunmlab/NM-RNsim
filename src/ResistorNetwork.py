@@ -283,12 +283,16 @@ class ResistorNetwork:
     # Copy all the settings into attributes of the RN
     for atr_name, atr_val in settings.items():
       setattr(rn, atr_name, atr_val)
+    
+    # Re-create fl_* arrays
+    #fv = nx.get_node_attributes(self.G, "fv") # fv is a [u,v,w] array
+    #fv = np.array(list(fv.values()))
+    
     # Fix in_pins and out_pins to be np arrays again
     rn.in_pins = [ (pin[0], np.array(pin[1])) for pin in rn.in_pins ]
     rn.out_pins = [ (pin[0], np.array(pin[1])) for pin in rn.out_pins ]
-    
     # TODO: I think there are other np.arrays that got stored as lists
-    # Yeah, it's the node and edge attributes, which are loaded here:
+    # Yeah, it's the node and edge attributes, which are loaded below
     
     # Load the nx graph
     rn.G = nx.readwrite.json_graph.node_link_graph(jso["nx_graph"])
