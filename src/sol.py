@@ -14,9 +14,8 @@ import scipy.sparse as sps
 import scipy.sparse.linalg as spsl
 import scipy.optimize as spo
 import numpy as np
-import jax
-import jax.numpy as jnp
-import optax
+
+import torch as tc
 
 # List of supported i-v curve functions
 iv_funs = ("L", "sinh", "relu")
@@ -104,7 +103,8 @@ def I(vp, vn, params):
     # If this is a vector with all the nodes, then exempt the pins
     if hasattr(is_on, "__len__") and len(is_on) > max(params["pinids"]):
       #is_on = is_on.at[params["pinids"]].set(1)
-      is_on = jax.ops.index_update(is_on, jnp.array(params["pinids"]), 1)
+      #is_on = jax.ops.index_update(is_on, jnp.array(params["pinids"]), 1)
+      is_on[params["pinids"]] = 1 #DEV
     elif "not_relu" in params and params["not_relu"]:
       # Exception for individual nodes to be non-relu
       is_on = 1
@@ -152,46 +152,49 @@ def sum_node_I(v, A, ni, w, pinids, ivfun="sinh"):
     "ivfun": ivfun
   }
   i_in = I(v, vn, params)
-  return jnp.sum(i_in)
+  return tc.sum(i_in)
 
-def NL_res_j(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
-  """NL_res, but compatible with jit.
-  Also take note of the changed order of arguments
+def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
+  """NL_res, compatible with pytorch
   """
   N = x.size + 1
   v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
   #db_print(163, jnp.max(v), jnp.min(v))
-  vcols, vrows = jnp.meshgrid(v, v)
+  vcols, vrows = tc.meshgrid(v, v, indexing="xy")
   if fun == "sinh":
     sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-    Asinh = jnp.multiply(A, jnp.sinh(sinharg))
+    Asinh = tc.mul(A, tc.sinh(sinharg))
     sumI = Asinh.sum(1) / w # sum of currents leaving each node
   elif fun == "relu":
     V = (vrows - vcols)
-    pin_indices = jnp.array([ni_in, ni_out, *pinids]) # Only for the immediate input and output...
+    pin_indices = tc.array([ni_in, ni_out, *pinids]) # Only for the immediate input and output...
     vsrc = (V > 0)
     # It's always okay for current to flow in or out of the pins
-    vsrc = vsrc.at[:,pin_indices].set(1) 
-    vsrc = vsrc.at[pin_indices,:].set(1)
+    vsrc[:,pin_indices] = 1
+    vsrc[pin_indices,:] = 1
     vsnk = (V < 0)
-    vsnk = vsnk.at[:,pin_indices].set(1)
-    vsnk = vsnk.at[pin_indices,:].set(1)
+    vsnk[:,pin_indices] = 1
+    vsnk[pin_indices,:] = 1
     # This method says that current should flow from low index pins
-    triui = jnp.triu_indices(N, 1)
-    trili = jnp.tril_indices(N, -1)
+    triui = tc.triu_indices(N, 1)
+    trili = tc.tril_indices(N, -1)
+    G = A
     #G = A.at[triui].multiply(vsrc[triui])
-    G = jax.ops.index_mul(A, triui, vsrc[triui])
+    #G = jax.ops.index_mul(A, triui, vsrc[triui])
+    G[triui] *= vsrc[triui]
     #G = G.at[trili].multiply(vsnk[trili])
-    G = jax.ops.index_mul(G, trili, vsnk[trili])
-    sumI = jnp.multiply(G, V).sum(1)
-  res = sumI.at[ni_in].add(- x[-1])
-  res = res.at[ni_out].add(x[-1])
+    #G = jax.ops.index_mul(G, trili, vsnk[trili])
+    G[trili] *= vsnk[trili]
+    sumI = tc.sparse.sum(tc.mul(G, V), 1)
+  res = sumI
+  res[ni_in] -= x[-1]
+  res[ni_out] += x[-1]
   # Add a term for error for impossible voltages
   #res = jnp.concatenate([res, 10*(x[0:-1]-v_in/2)*jnp.logical_or(
   #  x[0:-1]>v_in, x[0:-1]<0)])
   #res = res.at[0].add(jnp.sum([res, 10*(x[0:-1]-v_in/2)*jnp.logical_or(
   #  x[0:-1]>v_in, x[0:-1]<0)])) # not a good way.
-  res = jnp.nan_to_num(res, nan=1e10, posinf=1e15, neginf=-1e15)
+  res = tc.nan_to_num(res, nan=1e10, posinf=1e15, neginf=-1e15)
   return res#[1:] # Throw one equation out (the first one)
 
 def RNsol(params, options):
@@ -329,9 +332,9 @@ def NL_sol(params, options):
   ni_out = params["ni_out"]
   ivfun = params["ivfun"] if "ivfun" in params else "sinh"
 
-  # If necessary, convert A to a jnp array
+  # If necessary, convert A to a tc tensor
   if hasattr(params["A"], "toarray"):
-    A = jnp.array(A.toarray())
+    A = util.sps_to_tct(A)
 
   # Now reload the edited params into fprms
   fprms = {} # Filtered params
@@ -374,19 +377,20 @@ def NL_sol(params, options):
     db_print(f"Starting Nonlinear Solver: {method}")
 
   # Create jit compiled versions of the function
-  jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5,6,7])
-  res = lambda x: jres(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
-  jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5,6,7])
-  jac = lambda x: jjac(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
+  # TODO
+  #jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5,6,7])
+  res = lambda x: NL_res(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
+  #jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5,6,7])
+  #TODO: AUTOGRAD JACOBIAN
+  jac = lambda x: jacf(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
+
   #toc(times, "jit")
 
   rxi = res(xi)
+  db_print(f"||res(xi)||: {tc.linalg.norm(rxi)}")
   toc(times)#, "res(xi)")
-  # Treats ftol as relative to the current I
-  #   The 0.75 is because of uncertainty in the estimate for current
-  rstop = fopt["ftol"] * xi[-1] * 0.75
-  db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}; rstop: {rstop}")
-  if jnp.linalg.norm(rxi) < rstop:
+  if method != "adpt" and tc.linalg.norm(rxi) < fopt["ftol"]: #1e-9:
+    # For adpt, ftol has a different meaning. TODO: use a different name?
     # If xi is already within tolerance, we're done
     sol = RNOptRes(x=xi, status=0, nfev=1)
     sol.fun = rxi
@@ -420,12 +424,12 @@ def NL_sol(params, options):
   elif method == "optax-adam":
     # TODO: broken
     # Scalar conversion
-    loss = lambda x,A,w,pinids,v_in,ni_in,ni_out: jnp.sum(jnp.square(NL_res_j(
-      x, A, w, pinids, v_in, ni_in, ni_out, ivfun)))
-    jloss = jax.jit(loss, static_argnums=[2,3,4,5,6])
-    jgrad = jax.jit(jax.grad(loss, 0), static_argnums=[2,3,4,5,6])
-    jlx = lambda x: jloss(x,A,w,pinids,v_in,ni_in,ni_out) #"jlx" = Jitted Loss (x)
-    jgx = lambda x: jgrad(x,A,w,pinids,v_in,ni_in,ni_out)
+    #loss = lambda x,A,w,pinids,v_in,ni_in,ni_out: jnp.sum(jnp.square(NL_res_j(
+    #  x, A, w, pinids, v_in, ni_in, ni_out, ivfun)))
+    #jloss = jax.jit(loss, static_argnums=[2,3,4,5,6])
+    #jgrad = jax.jit(jax.grad(loss, 0), static_argnums=[2,3,4,5,6])
+    #jlx = lambda x: jloss(x,A,w,pinids,v_in,ni_in,ni_out) #"jlx" = Jitted Loss (x)
+    #jgx = lambda x: jgrad(x,A,w,pinids,v_in,ni_in,ni_out)
     # Parameters
     adam_opt = {
       "lrn_rate": 1e-3,
@@ -477,7 +481,7 @@ def NL_sol(params, options):
     #db_print(f"583: xi={xi}")
     sol = spo.root(res, xi, method="hybr", jac=jac, options=hopt)
     toc(times, f"hybr (w={w})")
-    #db_print(f"||res(sol.x)||: {jnp.linalg.norm(res(sol.x))}")
+    #db_print(f"||res(sol.x)||: {tc.linalg.norm(res(sol.x))}")
     #toc(times, "res(sol.x)")
   elif method == "trf":
     # The least_squares method doesn't take an options argument.
@@ -513,7 +517,7 @@ def NL_sol(params, options):
     sol = spo.least_squares(res, xi, jac=jac, method="trf", **trf_opt)
 
   rxf = res(sol.x)
-  db_print(f"||res(xf)||: {jnp.linalg.norm(rxf)}")
+  db_print(f"||res(xf)||: {tc.linalg.norm(rxf)}")
   toc(times, "NL_sol", total=True)
   return sol
 
@@ -532,7 +536,7 @@ def NL_adam(jlx, jgx, xi, options):
       rx = jlx(params['x'])
       gx = jgx(params['x'])
       #db_print(f"Iteration {it}: x[-5:]={params['x'][-5:]}, loss={rx}")
-      db_print(f"Iteration {it};\tloss={rx:.6f};\tmax(grad)={jnp.max(gx):.6f}")
+      db_print(f"Iteration {it};\tloss={rx:.6f};\tmax(grad)={tc.max(gx):.6f}")
     grads = {'x': jgx(params['x'])}
     updates, state = opt.update(grads, state)
     params = optax.apply_updates(params, updates)
@@ -563,21 +567,21 @@ def NL_custom_N(res, jac, xi, options):
   nfev = 0
   it = 0
   maxit = options["maxit"] if "maxit" in options else 500
-  fnorm = lambda x: jnp.linalg.norm(res(x))
+  fnorm = lambda x: tc.linalg.norm(res(x))
   # This makes the newton steps more like acceleration than velocity
   momentum = options["momentum"] if "momentum" in options else 0.2
-  laststep = jnp.zeros(xi.shape)
+  laststep = tc.zeros(xi.shape)
   x1 = xi
   r1 = res(x1)
-  err = jnp.linalg.norm(r1)
+  err = tc.linalg.norm(r1)
   itsince = 0
   xm_used = False # Has this xm already been reset back to?
   xm = x1 # x_min - best x so far
   rm = r1
-  errm = jnp.linalg.norm(rm)
+  errm = tc.linalg.norm(rm)
   while(it < maxit and err > rtol and nstep_2avg > xtol):
     J1 = jac(x1)
-    step, *_ = jnp.linalg.lstsq(J1, -r1)
+    step, *_ = tc.linalg.lstsq(J1, -r1)
     # Find the best step along that line
     step_mlt, lm_fev = util.line_min(fnorm, x1, err, step) # Simple 1D optimization
     db_print(536, step_mlt, lm_fev)
@@ -588,7 +592,7 @@ def NL_custom_N(res, jac, xi, options):
     x1 = x1 + step
     r1 = res(x1)
     nfev += 1
-    err = jnp.linalg.norm(r1)
+    err = tc.linalg.norm(r1)
     if err < errm:
       xm = x1
       rm = r1
@@ -607,18 +611,18 @@ def NL_custom_N(res, jac, xi, options):
         x1 = xm
         r1 = rm
         err = errm
-        laststep = jnp.zeros(xi.shape)
+        laststep = tc.zeros(xi.shape)
         itsince = 0
         xm_used = True
         db_print("Reset back to x_min")
 
     it += 1
     last_nstep = nstep
-    nstep = jnp.linalg.norm(step)
+    nstep = tc.linalg.norm(step)
     # Use a running average to allow occasional tiny steps
     nstep_2avg = (nstep + last_nstep) / 2
     #dJ = jnp.linalg.det(J1)
-    nJs = jnp.linalg.norm( jnp.dot(J1, step) )
+    nJs = tc.linalg.norm( tc.mm(J1, step) )
     db_print(f"At it#{it}/{maxit}, err={err}, ||step||={nstep},"# |J|={dJ},"
       f" ||J*step||={nJs}")
   sol = RNOptRes()
@@ -678,13 +682,15 @@ def NL_adpt(params, options):
     sol = NL_sol(params, opt_i)
     if options["verbose"]:
       db_print(f"NL_sol (nfev={sol.nfev}) message: {sol.message}")
-    res = jnp.linalg.norm(sol.fun)
+    res = tc.linalg.norm(sol.fun)
     set_xvIR(sol, sol.x, v_in, ni_in, ni_out)
     I = sol.I_in
     v = sol.v
     i_in = - sum_node_I(v, A, ni_in, w, pinids, ivfun=ivfun)
     i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
-    ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
+    #ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
+    I_s = tc.tensor((i_in, i_out, I))
+    ierr = tc.max(I_s) - tc.min(I_s)
     newerr = max(res, ierr)
     err_stop = max(I*ftol, tol_min)
     db_print(f"Error={newerr}, stopping err={err_stop}")
@@ -760,12 +766,14 @@ def NL_mlt(params, options, methods, final_ftol):
       # However, when you start from a bad starting place, it's worse.
       db_print("Warning: the solver did not converge")
     if sol.success:
-      rx1 = jnp.linalg.norm(sol.fun)
-      rx1_max = jnp.max(sol.fun)
+      rx1 = tc.linalg.norm(sol.fun)
+      rx1_max = tc.max(sol.fun)
       v = util.ainsrt2(sol.x, ni_in, v_in, ni_out, 0)[0:-1]
       i_in = - sum_node_I(v, A, ni_in, w, pinids, ivfun=ivfun)
       i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
-      KCL_err = jnp.ptp(jnp.array( (i_in, i_out, sol.x[-1]) ))
+      #KCL_err = tc.ptp(jnp.array( (i_in, i_out, sol.x[-1]) ))
+      I_s = tc.tensor((i_in, i_out, sol.x[-1]))
+      KCL_err = tc.max(I_s) - tc.min(I_s)
       db_print(854, i_in, i_out, sol.x[-1], rx1, rx1_max)
       err = max(KCL_err, rx1)
       if options["verbose"]:
@@ -786,13 +794,13 @@ def gen_xi(fprms, Asp, options, times):
       If "Lcg", then find an xi by solving the linear system with cg
       If "L_{nonlin_method}_{N} then solve sequentially for better xi-s
         by gradually increasing the nonlinearity N times. (for SINH)
-      If N+1 np array, just convert it to a jnp array
+      If N+1 np array, just convert it to a tc.tensor
     fprms: Parameters from NL_sol
     Asp: Sparse Adjacency Matrix
     options: Options from NL_sol
   Returns
   -------
-    xi (jnp array) : improved initial guess for the solution
+    xi (tc.tensor) : improved initial guess for the solution
   """
 
   v_in = fprms["v_in"]
@@ -804,7 +812,7 @@ def gen_xi(fprms, Asp, options, times):
   if xi is None:
     # The x vector should be 1 shorter than the v vector
     N = Asp.shape[0]-1 # Asp is a scipy sparse matrix
-    xi = jnp.zeros(N) #.at[ni_in].set(v_in)
+    xi = tc.zeros(N) #.at[ni_in].set(v_in)
   elif isinstance(xi, str):
     assert xi[0] == "L", "483: Unknown xi option"
     # Log message & increase indent
@@ -828,11 +836,11 @@ def gen_xi(fprms, Asp, options, times):
     xL = np.delete(xL, [ni_in, ni_out])
     toc(times, "Lcg")
     if xi == "Lcg":
-      xi = jnp.array(xL)
+      xi = tc.tensor(xL)
     else:
       # Presolving with smaller w. Format: "L_method_N"
       xi_parts = xi.split("_") 
-      xi = jnp.array(xL)
+      xi = tc.tensor(xL)
       N_pre = int(xi_parts[2])
       ximethod = xi_parts[1]
       assert ximethod in NL_methods
@@ -860,7 +868,7 @@ def gen_xi(fprms, Asp, options, times):
     # Return to previous indentation level
     util.log_indent -= 1
   else:
-    xi = jnp.array(xi)
+    xi = tc.tensor(xi)
   # DONE
   return xi
 
@@ -870,7 +878,7 @@ def L_from_A(A):
   if sps.issparse(A):
     D = sps.diags(np.array(A.sum(1)).squeeze())
   else:
-    D = jnp.diag(A.sum(1))
+    D = tc.diag(A.sum(1))
   return D - A
 
 def L_sol(params, options):

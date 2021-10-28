@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-import jax.numpy as jnp
+import scipy.sparse as sps
+import torch as tc
 
 # List of strings (in lowercase) that are considered equivalent to True
 true_strs = ("true", "t", "yes", "y", "on", "1")
@@ -29,6 +30,11 @@ timing = False
 log_fname = "log_TEMP.txt"
 use_stdout = False
 log_indent = 0
+
+# Set up torch device
+#gpu = 0
+#device = tc.device(f"cuda:{gpu}" if tc.cuda.is_available() else "cpu")
+device = tc.device(f"cuda" if tc.cuda.is_available() else "cpu")
 
 def str2arr(s):
   """Converts a comma-separated list of floats to a np.array.
@@ -61,7 +67,7 @@ def ainsrt(x, insertions):
     y = np.insert(y, n, v)
   return y
 
-def ainsrt2(x, i0, v0, i1, v1):
+def ainsrt2_jax(x, i0, v0, i1, v1):
   """Insert a series of values at the specified indices into the given array.
   insertions : [(i0, v0), (i1, v1)]
   Like ainsrt, but specifically for inserting 2 values and compatible with jit.
@@ -72,6 +78,30 @@ def ainsrt2(x, i0, v0, i1, v1):
   x10 = jnp.concatenate([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ], axis=None)[0:N]
   # Essentially it's an if statement here
   return jnp.where(i0 < i1, x01, x10)
+
+def ainsrt2(x, i0, v0, i1, v1):
+  """Insert a series of values at the specified indices into the given array.
+  insertions : [(i0, v0), (i1, v1)]
+  Like ainsrt, but specifically for inserting 2 values and compatible with jit.
+  """
+  N = x.size+2
+  # TODO: NOT OPTIMIZED
+  x01 = tc.cat([ x[0:i0], v0, x[i0:i1-1], v1, x[i1-1:] ])[0:N]
+  x10 = tc.cat([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ])[0:N]
+  # Essentially it's an if statement here
+  return tc.where(i0 < i1, x01, x10)
+
+def sps_to_tct(M):
+  """sps matrix to torch.tensor
+  """
+  coo = sps.coo_matrix(M)
+  values = coo.data
+  indices = np.vstack((coo.row, coo.col))
+  i = tc.tensor(indices, dtype=tc.int32, device=device)
+  v = tc.tensor(values, dtype=tc.float64, device=device)
+  shape = coo.shape
+  M = tc.sparse_coo_tensor(i, v, tc.Size(shape), dtype=tc.float64, device=device)
+  return M
 
 def sim_log(*strings):
   """Record s in the sim log file
@@ -325,7 +355,7 @@ def parabola_opt(fx0, fx1, fx2):
   """
   xc = (3*fx0 - 4*fx1 + fx2) / (2*fx0 - 4*fx1 + 2*fx2)
   #db_print(316, fx0, fx1, fx2, xc)
-  if jnp.isnan(xc):
+  if tc.isnan(xc):
     return 1
   eps = 1e-6
   return max(min(xc, 2-eps), eps)
