@@ -84,12 +84,17 @@ def ainsrt2(x, i0, v0, i1, v1):
   insertions : [(i0, v0), (i1, v1)]
   Like ainsrt, but specifically for inserting 2 values and compatible with jit.
   """
-  N = x.size+2
+  if not tc.is_tensor(x):
+    x = tc.tensor(x, device=device)
+  N = x.size(0)+2
+  v0 = tc.tensor([v0], dtype=tc.float64, device=device)
+  v1 = tc.tensor([v1], dtype=tc.float64, device=device)
   # TODO: NOT OPTIMIZED
   x01 = tc.cat([ x[0:i0], v0, x[i0:i1-1], v1, x[i1-1:] ])[0:N]
   x10 = tc.cat([ x[0:i1], v1, x[i1:i0-1], v0, x[i0-1:] ])[0:N]
   # Essentially it's an if statement here
-  return tc.where(i0 < i1, x01, x10)
+  condition = tc.tensor(i0 < i1, device=device)
+  return tc.where(condition, x01, x10)
 
 def sps_to_tct(M):
   """sps matrix to torch.tensor

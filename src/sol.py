@@ -46,11 +46,17 @@ class RNOptRes(spo.OptimizeResult):
     self.nfev = nfev
     self.status = status
     if x is not None:
-      self.x = x
       if (v_in is not None and ni_in is not None and ni_out is not None):
         set_xvIR(self, x, v_in, ni_in, ni_out)
+      elif tc.is_tensor(x):
+        self.x = x.cpu()
+      else:
+        self.x = x
     if v is not None:
-      self.v = v
+      if tc.is_tensor(v):
+        self.v = v.cpu()
+      else:
+        self.v = v
     if I_in is not None:
       self.I_in = I_in
     if Req is not None:
@@ -64,8 +70,11 @@ def set_xvIR(RNOR, x, v_in, ni_in, ni_out):
   """
   RNOR.x = x
   RNOR.v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
-  RNOR.v = np.array(RNOR.v, dtype=np.float)
-  I_in = x[-1]
+  if tc.is_tensor(RNOR.v):
+    RNOR.v = np.array(RNOR.v.cpu(), dtype=np.float)
+  if tc.is_tensor(RNOR.x):
+    RNOR.x = np.array(RNOR.x.cpu(), dtype=np.float)
+  I_in = RNOR.x[-1]
   if np.abs(I_in) < 1e-30:
     Req = 1e30
   else:
@@ -157,15 +166,26 @@ def sum_node_I(v, A, ni, w, pinids, ivfun="sinh"):
 def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
   """NL_res, compatible with pytorch
   """
-  N = x.size + 1
+  if not tc.is_tensor(x):
+    x = tc.tensor(x, device=util.device)
+  N = x.size(0) + 1
   v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
   #db_print(163, jnp.max(v), jnp.min(v))
-  vcols, vrows = tc.meshgrid(v, v, indexing="xy")
   if fun == "sinh":
+    # Uses Sparse Matrices, but uses FOR loop. Not taking advantage of GPU.
+    #Isrc = tc.zeros_like(v)
+    #ind = A.coalesce().indices()
+    #for i,j in zip(ind[0], ind[1]):
+    #  Isrc[i] += A[i,j]/w * tc.sinh(w*(v[i] - v[j]))
+    # Creates Dense Matrices:
+    AD = A.to_dense()
+    vcols, vrows = tc.meshgrid(v, v, indexing="xy")
     sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-    Asinh = tc.mul(A, tc.sinh(sinharg))
-    sumI = Asinh.sum(1) / w # sum of currents leaving each node
+    Asinh = tc.mul(AD, tc.sinh(sinharg))
+    Isrc = Asinh.sum(1) / w # sum of currents leaving each node
   elif fun == "relu":
+    # Creates Dense Matrices:
+    vcols, vrows = tc.meshgrid(v, v, indexing="xy")
     V = (vrows - vcols)
     pin_indices = tc.array([ni_in, ni_out, *pinids]) # Only for the immediate input and output...
     vsrc = (V > 0)
@@ -185,8 +205,8 @@ def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
     #G = G.at[trili].multiply(vsnk[trili])
     #G = jax.ops.index_mul(G, trili, vsnk[trili])
     G[trili] *= vsnk[trili]
-    sumI = tc.sparse.sum(tc.mul(G, V), 1)
-  res = sumI
+    Isrc = tc.sparse.sum(tc.mul(G, V), 1)
+  res = Isrc
   res[ni_in] -= x[-1]
   res[ni_out] += x[-1]
   # Add a term for error for impossible voltages
@@ -195,6 +215,7 @@ def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
   #res = res.at[0].add(jnp.sum([res, 10*(x[0:-1]-v_in/2)*jnp.logical_or(
   #  x[0:-1]>v_in, x[0:-1]<0)])) # not a good way.
   res = tc.nan_to_num(res, nan=1e10, posinf=1e15, neginf=-1e15)
+  db_print(tc.cuda.memory_summary(abbreviated=True))
   return res#[1:] # Throw one equation out (the first one)
 
 def RNsol(params, options):
@@ -673,7 +694,7 @@ def NL_adpt(params, options):
   err_stop = max(I/2*ftol, tol_min)
 
   # Initial r
-  err = np.linalg.norm(NL_res_j(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
+  err = tc.linalg.norm(NL_res(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
   while err > err_stop:
     if options["verbose"]:
       db_print(f"Running adaptive solver step {i}: method {mtd}, tol={tol}")
@@ -689,7 +710,7 @@ def NL_adpt(params, options):
     i_in = - sum_node_I(v, A, ni_in, w, pinids, ivfun=ivfun)
     i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
     #ierr = jnp.ptp(jnp.array((i_in, i_out, I)))
-    I_s = tc.tensor((i_in, i_out, I))
+    I_s = tc.tensor((i_in, i_out, I), device=util.device)
     ierr = tc.max(I_s) - tc.min(I_s)
     newerr = max(res, ierr)
     err_stop = max(I*ftol, tol_min)
@@ -748,7 +769,7 @@ def NL_mlt(params, options, methods, final_ftol):
   opt_i = options.copy()
 
   # Initial r
-  rxi = np.linalg.norm(NL_res_j(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
+  rxi = tc.linalg.norm(NL_res(xi, A, w, pinids, v_in, ni_in, ni_out, ivfun))
   for mtd, tol in methods:
     if options["verbose"]:
       db_print(579, f"Running method {mtd} with tol={tol}")
@@ -772,7 +793,7 @@ def NL_mlt(params, options, methods, final_ftol):
       i_in = - sum_node_I(v, A, ni_in, w, pinids, ivfun=ivfun)
       i_out = sum_node_I(v, A, ni_out, w, pinids, ivfun=ivfun)
       #KCL_err = tc.ptp(jnp.array( (i_in, i_out, sol.x[-1]) ))
-      I_s = tc.tensor((i_in, i_out, sol.x[-1]))
+      I_s = tc.tensor((i_in, i_out, sol.x[-1]), device=util.device)
       KCL_err = tc.max(I_s) - tc.min(I_s)
       db_print(854, i_in, i_out, sol.x[-1], rx1, rx1_max)
       err = max(KCL_err, rx1)
@@ -812,7 +833,7 @@ def gen_xi(fprms, Asp, options, times):
   if xi is None:
     # The x vector should be 1 shorter than the v vector
     N = Asp.shape[0]-1 # Asp is a scipy sparse matrix
-    xi = tc.zeros(N) #.at[ni_in].set(v_in)
+    xi = tc.zeros(N, device=util.device) #.at[ni_in].set(v_in)
   elif isinstance(xi, str):
     assert xi[0] == "L", "483: Unknown xi option"
     # Log message & increase indent
@@ -836,11 +857,11 @@ def gen_xi(fprms, Asp, options, times):
     xL = np.delete(xL, [ni_in, ni_out])
     toc(times, "Lcg")
     if xi == "Lcg":
-      xi = tc.tensor(xL)
+      xi = tc.tensor(xL, device=util.device)
     else:
       # Presolving with smaller w. Format: "L_method_N"
       xi_parts = xi.split("_") 
-      xi = tc.tensor(xL)
+      xi = tc.tensor(xL, device=util.device)
       N_pre = int(xi_parts[2])
       ximethod = xi_parts[1]
       assert ximethod in NL_methods
@@ -867,8 +888,8 @@ def gen_xi(fprms, Asp, options, times):
       toc(times, f"xi presolving, method={ximethod}")
     # Return to previous indentation level
     util.log_indent -= 1
-  else:
-    xi = tc.tensor(xi)
+  elif not tc.is_tensor(xi):
+    xi = tc.tensor(xi, device=util.device)
   # DONE
   return xi
 
