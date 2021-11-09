@@ -16,6 +16,7 @@ import scipy.optimize as spo
 import numpy as np
 
 import torch as tc
+import torch.sparse as tcs
 
 # List of supported i-v curve functions
 iv_funs = ("L", "sinh", "relu")
@@ -172,17 +173,25 @@ def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
   v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
   #db_print(163, jnp.max(v), jnp.min(v))
   if fun == "sinh":
+    # New method that uses sparse matrices effectively, I think
+    ind = A.indices()
+    Gvals = A.values()
+    Dv = v[ind[0]] - v[ind[1]]
+    currents = Gvals/w * tc.sinh(w*Dv)
+    terms = tc.sparse_coo_tensor(ind, currents, tc.Size(A.shape), 
+      dtype=tc.float64, device=util.device)
+    Isrc = tcs.sum(terms, 1).to_dense()
     # Uses Sparse Matrices, but uses FOR loop. Not taking advantage of GPU.
     #Isrc = tc.zeros_like(v)
     #ind = A.coalesce().indices()
     #for i,j in zip(ind[0], ind[1]):
     #  Isrc[i] += A[i,j]/w * tc.sinh(w*(v[i] - v[j]))
     # Creates Dense Matrices:
-    AD = A.to_dense()
-    vcols, vrows = tc.meshgrid(v, v, indexing="xy")
-    sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-    Asinh = tc.mul(AD, tc.sinh(sinharg))
-    Isrc = Asinh.sum(1) / w # sum of currents leaving each node
+    #AD = A.to_dense()
+    #vcols, vrows = tc.meshgrid(v, v, indexing="xy")
+    #sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
+    #Asinh = tc.mul(AD, tc.sinh(sinharg))
+    #Isrc = Asinh.sum(1) / w # sum of currents leaving each node
   elif fun == "relu":
     # Creates Dense Matrices:
     vcols, vrows = tc.meshgrid(v, v, indexing="xy")

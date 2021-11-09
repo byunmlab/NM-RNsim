@@ -106,7 +106,7 @@ def sps_to_tct(M):
   v = tc.tensor(values, dtype=tc.float64, device=device)
   shape = coo.shape
   M = tc.sparse_coo_tensor(i, v, tc.Size(shape), dtype=tc.float64, device=device)
-  return M
+  return M.coalesce()
 
 def sim_log(*strings):
   """Record s in the sim log file
