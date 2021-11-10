@@ -40,22 +40,24 @@ class RNOptRes(spo.OptimizeResult):
   If initialized with x, v_in, ni_in, & ni_out, this is sufficient
   """
   def __init__(self, x=None, v=None, status=-999, message=None, nfev=-1,
-    I_in=None, Req=None, v_in=None, ni_in=None, ni_out=None):
+    I_in=None, Req=None, v_in=None, ni_in=None, ni_out=None, on_cpu=True):
     """Constructor
+      if on_cpu, make sure that all the tensors are np arrays on the cpu
     """
     super().__init__()
     self.nfev = nfev
     self.status = status
+    self.on_cpu = on_cpu
     if x is not None:
       if (v_in is not None and ni_in is not None and ni_out is not None):
-        set_xvIR(self, x, v_in, ni_in, ni_out)
-      elif tc.is_tensor(x):
-        self.x = x.cpu()
+        set_xvIR(self, x, v_in, ni_in, ni_out) # Takes care of on_cpu too
+      elif on_cpu and tc.is_tensor(x):
+        self.x = np.array(x.cpu(), dtype=np.float)
       else:
         self.x = x
     if v is not None:
-      if tc.is_tensor(v):
-        self.v = v.cpu()
+      if on_cpu and tc.is_tensor(v):
+        self.v = np.array(v.cpu(), dtype=np.float)
       else:
         self.v = v
     if I_in is not None:
@@ -71,12 +73,14 @@ def set_xvIR(RNOR, x, v_in, ni_in, ni_out):
   """
   RNOR.x = x
   RNOR.v = util.ainsrt2(x, ni_in, v_in, ni_out, 0)[0:-1]
-  if tc.is_tensor(RNOR.v):
+  # If on_cpu, then convert to np arrays
+  if RNOR.on_cpu and tc.is_tensor(RNOR.v):
     RNOR.v = np.array(RNOR.v.cpu(), dtype=np.float)
-  if tc.is_tensor(RNOR.x):
+  if RNOR.on_cpu and tc.is_tensor(RNOR.x):
     RNOR.x = np.array(RNOR.x.cpu(), dtype=np.float)
+  # Add I_in and Req (scalars) to RNOR
   I_in = RNOR.x[-1]
-  if np.abs(I_in) < 1e-30:
+  if abs(I_in) < 1e-30:
     Req = 1e30
   else:
     Req = v_in / I_in
@@ -181,18 +185,8 @@ def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
     terms = tc.sparse_coo_tensor(ind, currents, tc.Size(A.shape), 
       dtype=tc.float64, device=util.device)
     Isrc = tcs.sum(terms, 1).to_dense()
-    # Uses Sparse Matrices, but uses FOR loop. Not taking advantage of GPU.
-    #Isrc = tc.zeros_like(v)
-    #ind = A.coalesce().indices()
-    #for i,j in zip(ind[0], ind[1]):
-    #  Isrc[i] += A[i,j]/w * tc.sinh(w*(v[i] - v[j]))
-    # Creates Dense Matrices:
-    #AD = A.to_dense()
-    #vcols, vrows = tc.meshgrid(v, v, indexing="xy")
-    #sinharg = w * (vrows - vcols) # Argument to be 'sinh()'ed
-    #Asinh = tc.mul(AD, tc.sinh(sinharg))
-    #Isrc = Asinh.sum(1) / w # sum of currents leaving each node
   elif fun == "relu":
+    #TODO
     # Creates Dense Matrices:
     vcols, vrows = tc.meshgrid(v, v, indexing="xy")
     V = (vrows - vcols)
@@ -267,7 +261,7 @@ def RNsol(params, options):
     util.log_indent += 1
 
   # Result object
-  result = RNOptRes()
+  result = RNOptRes(on_cpu=True)
 
   v_in = params["v_in"]
   ni_in = params["ni_in"]
@@ -338,6 +332,8 @@ def NL_sol(params, options):
     options (dict): Options about how to solve it
       method (element of NL_methods): Which solver to use
       verbose (int, [0,3]): Verbosity
+      on_cpu (bool): Whether to return np arrays on the cpu or pytorch tensors
+        on the GPU
       xtol: tolerance in x
       ftol: tolerance in f
       xi (str or N+1 np array) : initial guess for the solution. If None, xi=0
@@ -383,9 +379,9 @@ def NL_sol(params, options):
   bounds = (np.zeros(N)-1e-6, ubound+1e-6)
 
   # Rename some of the contents of options for convenience
-  xi = options["xi"]
   method = options["method"]
   verbose = options["verbose"] if "verbose" in options else util.debug
+  on_cpu = options["on_cpu"] if "on_cpu" in options else True
 
   # If verbose is not an int, then make it a 0/1 bool
   if type(verbose) != int:
@@ -398,6 +394,7 @@ def NL_sol(params, options):
   fopt["xi"] = xi
   fopt["method"] = method
   fopt["verbose"] = verbose
+  fopt["on_cpu"] = on_cpu
   if "xtol" in options:
     fopt["xtol"] = options["xtol"]
   if "ftol" in options:
@@ -422,7 +419,7 @@ def NL_sol(params, options):
   if method != "adpt" and tc.linalg.norm(rxi) < fopt["ftol"]: #1e-9:
     # For adpt, ftol has a different meaning. TODO: use a different name?
     # If xi is already within tolerance, we're done
-    sol = RNOptRes(x=xi, status=0, nfev=1)
+    sol = RNOptRes(x=xi, status=0, nfev=1, on_cpu=on_cpu)
     sol.fun = rxi
     sol.message = "xi is already within tolerance"
 
@@ -495,8 +492,8 @@ def NL_sol(params, options):
     sol = spo.root(res, xi, method="krylov", options=nkopt)
   elif method == "hybr":
     # Make it square for hybr
-    res = lambda x: jres(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)[1:]
-    jac = lambda x: jjac(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)[1:]
+    hres = lambda x: np.array(res(x).cpu())[1:]
+    hjac = lambda x: jac(x)[1:]
     xtol = options["xtol"] if "xtol" in options else 1e-3
     if "tol" in options:
       xtol = options["tol"]
@@ -509,7 +506,11 @@ def NL_sol(params, options):
     hopt["diag"] = np.ones(N)
     hopt["diag"][-1] = N
     #db_print(f"583: xi={xi}")
-    sol = spo.root(res, xi, method="hybr", jac=jac, options=hopt)
+    # Only works on the CPU
+    # Makes me want to re-write or find these for pytorch
+    if tc.is_tensor(xi):
+      xi = np.array(xi.cpu())
+    sol = spo.root(hres, xi, method="hybr", jac=hjac, options=hopt)
     toc(times, f"hybr (w={w})")
     #db_print(f"||res(sol.x)||: {tc.linalg.norm(res(sol.x))}")
     #toc(times, "res(sol.x)")
@@ -538,12 +539,12 @@ def NL_sol(params, options):
     trf_opt["gtol"] = options["gtol"] if "gtol" in options else 1e-10
     # Make sure xi is feasible
     #db_print(617, len(xi[xi<0]))
-    xi = xi.at[xi<0].set(0)
-    #db_print(619, len(xi[xi>v_in]))
+    xi[xi<0] = 0
     Ii = xi[-1]
-    xi = xi.at[xi>v_in].set(v_in)
-    xi = xi.at[-1].set(Ii) # x[-1] has no upper bound
+    xi[xi>v_in] = v_in
+    xi[-1] = Ii # x[-1] has no upper bound
     xi = xi.flatten()
+    # This function works on the CPU
     sol = spo.least_squares(res, xi, jac=jac, method="trf", **trf_opt)
 
   rxf = res(sol.x)
@@ -572,7 +573,7 @@ def NL_adam(jlx, jgx, xi, options):
     params = optax.apply_updates(params, updates)
     it += 1
 
-  sol = RNOptRes()
+  sol = RNOptRes(on_cpu=options["on_cpu"])
   sol.x = params['x']
   sol.loss = jlx(sol.x)
   sol.grad = jgx(sol.x)
@@ -655,7 +656,7 @@ def NL_custom_N(res, jac, xi, options):
     nJs = tc.linalg.norm( tc.mm(J1, step) )
     db_print(f"At it#{it}/{maxit}, err={err}, ||step||={nstep},"# |J|={dJ},"
       f" ||J*step||={nJs}")
-  sol = RNOptRes()
+  sol = RNOptRes(on_cpu=options["on_cpu"])
   sol.x = xm
   sol.fun = rm
   sol.err = errm
@@ -687,12 +688,13 @@ def NL_adpt(params, options):
   ni_out = params["ni_out"]
   ivfun = params["ivfun"]
   xi = options["xi"]
+  on_cpu = options["on_cpu"]
   ftol = options["ftol"] if "ftol" in options else 1e-2
   opt_i = options.copy()
   opt_i["ftol"] = tol_min # We're using xtol
 
   # Set up initial sol
-  sol = RNOptRes(xi, v_in=v_in, ni_in=ni_in, ni_out=ni_out)
+  sol = RNOptRes(xi, v_in=v_in, ni_in=ni_in, ni_out=ni_out, on_cpu=on_cpu)
 
   i = 0
   I = xi[-1]
@@ -838,7 +840,7 @@ def gen_xi(fprms, Asp, options, times):
   ni_in = fprms["ni_in"]
   ni_out = fprms["ni_out"]
   xi = options["xi"]
-  
+
   if xi is None:
     # The x vector should be 1 shorter than the v vector
     N = Asp.shape[0]-1 # Asp is a scipy sparse matrix
@@ -887,12 +889,15 @@ def gen_xi(fprms, Asp, options, times):
         options_i = {
           "xi": xi,
           "method": ximethod,
-          "xtol": options["xtol"]/tol_div if "xtol" in options else 1e-6,
-          "ftol": options["ftol"]/tol_div if "ftol" in options else 1e-4,
+          "xtol": options["xtol"] if "xtol" in options else 1e-6,
+          "ftol": options["ftol"] if "ftol" in options else 1e-4,
+          "on_cpu": False
         }
         soli = NL_sol(params_i, options_i)
         #db_print(soli.__dict__)
         xi = soli.x
+        if not tc.is_tensor(xi):
+          xi = tc.tensor(xi, device=util.device)
       db_print(503, "Done with presolving")
       toc(times, f"xi presolving, method={ximethod}")
     # Return to previous indentation level
