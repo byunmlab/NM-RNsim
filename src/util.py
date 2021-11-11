@@ -54,6 +54,11 @@ def bin_to_bools(Nbin):
   # This loops from the end to the 3rd character (so as to skip the "0b")
   return [ bool(int(i)) for i in Nbin[-1:1:-1] ]
 
+def genfilename():
+  """Generate a unique filename
+  """
+  return "f_" + time.strftime("%Y%m%dT%H%M%S")
+
 def ainsrt(x, insertions):
   """Insert a series of values at the specified indices into the given array.
   insertions : [(i0, v0), (i1, v1), ...]

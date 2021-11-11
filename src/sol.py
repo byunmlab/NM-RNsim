@@ -18,10 +18,16 @@ import numpy as np
 import torch as tc
 import torch.sparse as tcs
 
+# Initialize loss function
+#MSEL22 = tc.nn.MSELoss(reduction="sum")
+#L22 = lambda x: MSEL22(x, tc.zeros_like(x))
+# Loss: L2 norm squared
+L22 = lambda x: tc.sum(tc.square(x))
+
 # List of supported i-v curve functions
 iv_funs = ("L", "sinh", "relu")
 # List of supported nonlinear solver methods
-NL_methods = ("n-k", "hybr", "trf", "mlt", "adpt", "custom", "optax-adam")
+NL_methods = ("n-k", "hybr", "trf", "mlt", "adpt", "custom", "tc-adam")
 # Min tolerance. A little bigger than epsilon
 tol_min = 1e-15
 
@@ -218,7 +224,6 @@ def NL_res(x, A, w, pinids, v_in, ni_in, ni_out, fun="sinh"):
   #res = res.at[0].add(jnp.sum([res, 10*(x[0:-1]-v_in/2)*jnp.logical_or(
   #  x[0:-1]>v_in, x[0:-1]<0)])) # not a good way.
   res = tc.nan_to_num(res, nan=1e10, posinf=1e15, neginf=-1e15)
-  db_print(tc.cuda.memory_summary(abbreviated=True))
   return res#[1:] # Throw one equation out (the first one)
 
 def RNsol(params, options):
@@ -426,6 +431,16 @@ def NL_sol(params, options):
   elif method == "adpt":
     sol = NL_adpt(fprms, fopt)
 
+  elif method == "tc-adam":
+    # Parameters
+    adam_options = {
+      "lrn_rate": 1e-7,
+      "maxit": 10000,
+      "on_cpu": on_cpu
+    }
+    sol = NL_adam(res, xi, adam_options)
+    toc(times, f"Pytorch Adam solver (w={w})")
+
   elif method == "mlt":
     # Chain multiple solvers
     #ltol = 5e-3
@@ -552,7 +567,61 @@ def NL_sol(params, options):
   toc(times, "NL_sol", total=True)
   return sol
 
-def NL_adam(jlx, jgx, xi, options):
+class tcModel(tc.nn.Module):
+  """Model for pytorch
+  See https://towardsdatascience.com/how-to-use-pytorch-as-a-general-optimizer-a91cbf72a7fb
+    and https://pytorch.org/tutorials/beginner/examples_nn/polynomial_optim.html?highlight=optim
+  """
+  def __init__(self, Lfun, xi):
+    super().__init__()
+    # Save the loss function
+    self.Lfun = Lfun
+    # Define x as a Parameter to be optimized and initialize it
+    self.x = tc.nn.Parameter(xi)
+  def forward(self):
+    return self.Lfun(self.x)
+
+def NL_adam(res, xi, options):
+  """Adam solver from pytorch
+  """
+  Lfun = lambda x: L22(res(x))
+  lrn_rate = options["lrn_rate"] if "lrn_rate" in options else 1e-3
+  maxit = options["maxit"] if "maxit" in options else 1000
+
+  # Initialize the pytorch model
+  model = tcModel(Lfun, xi)
+  # Initialize the pytorch Adam optimizer
+  optimizer = tc.optim.Adam(model.parameters(), lr=lrn_rate)
+  #optimizer = tc.optim.Adagrad(model.parameters(), lr=lrn_rate)
+
+  # Optimize
+  it = 0
+  losses = []
+  while it < maxit:
+    loss = model() # Calculate loss
+    loss.backward() # Calculate gradients
+    optimizer.step() # Take a step
+    optimizer.zero_grad() # Zero the gradients
+    it += 1
+    if it%1000 == 0:
+      db_print(f"Iteration {it} / {maxit};\tloss={loss:.6f}")
+    losses.append(loss)
+  # Save the losses so I can graph them
+  lossfile = util.genfilename() + "_losses.csv"
+  np.savetxt(lossfile, losses, delimiter=",")
+  db_print("losses saved to file: "+lossfile)
+  db_print("606, memory:\n"+tc.cuda.memory_summary(abbreviated=True))
+
+  sol = RNOptRes(on_cpu=options["on_cpu"])
+  sol.x = model.x.detach()
+  sol.loss = model()
+  #sol.grad = jgx(sol.x)
+  sol.it = it
+  sol.message = "MESSAGE STUB" # TMP
+  sol.success = True # TMP
+  return sol
+
+def NL_adam_optax(jlx, jgx, xi, options):
   """Adam solver from optax
   """
   # Set up optax
