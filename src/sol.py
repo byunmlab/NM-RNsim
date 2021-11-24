@@ -434,12 +434,14 @@ def NL_sol(params, options):
   elif method == "tc-adam":
     # Parameters
     adam_options = {
-      "lrn_rate": 1e-7,
-      "maxit": 10000,
-      "on_cpu": on_cpu
+      "lrn_rate": 1e-6,
+      "maxit": 50000,
+      "on_cpu": on_cpu,
+      "rftol": fopt["ftol"],
+      "xtol": fopt["xtol"]
     }
     sol = NL_adam(res, xi, adam_options)
-    toc(times, f"Pytorch Adam solver (w={w})")
+    toc(times, f"Pytorch Adam solver (w={w}, it={sol.it})")
 
   elif method == "mlt":
     # Chain multiple solvers
@@ -585,8 +587,23 @@ def NL_adam(res, xi, options):
   """Adam solver from pytorch
   """
   Lfun = lambda x: L22(res(x))
-  lrn_rate = options["lrn_rate"] if "lrn_rate" in options else 1e-3
+  lrn_rate = options["lrn_rate"] if "lrn_rate" in options else 1e-6
   maxit = options["maxit"] if "maxit" in options else 1000
+  if "rftol" in options:
+    rftol = options["rftol"]
+  elif "ftol" in options:
+    rftol = options["ftol"]
+  else:
+    rftol = 1e-3
+  if "xtol" in options:
+    xtol = options["xtol"]
+  else:
+    xtol = 1e-8
+  # How much worse does loss need to be to trigger decreasing the learning rate?
+  worse_margin = 1.1
+  # Forgive jumpiness in the first entry_it iterations
+  entry_it = 500 #maxit / 20 #?
+  it_last_tighten = 0 # Last time we tightened the learning rate
 
   # Initialize the pytorch model
   model = tcModel(Lfun, xi)
@@ -597,17 +614,49 @@ def NL_adam(res, xi, options):
   # Optimize
   it = 0
   losses = []
-  while it < maxit:
+  loss = 100
+  lstop = 10
+  lastx = tc.clone(xi)
+  lastloss = loss
+  # Will abort when the square of the euclidian distance between x and lastx
+  #   is less than dx2stop. I.e. the distance from lastx to x < xtol.
+  dx2stop = xtol**2
+  dx2 = 2*dx2stop #tc.tensor(2*dx2stop, device=util.device)
+  while it < maxit and loss > lstop and dx2 > dx2stop:
+    optimizer.zero_grad() # Zero the gradients
     loss = model() # Calculate loss
     loss.backward() # Calculate gradients
-    optimizer.step() # Take a step
-    optimizer.zero_grad() # Zero the gradients
+    optimizer.step() # Take a step (updates model.x in place)
+    # Update the stopping conditions
+    I = model.x[-1]
+    # If rftol = 0.01, then the stopping error will be 1% of I
+    #   Unless that number is less than tol_min
+    # The stopping loss is (stopping error)**2
+    # TODO: the adpt method considers KCL error too and considers the max
+    lstop = max(I*rftol, tol_min)**2
+    # TODO: gtol?
+    # See if xtol stopping condition is satisfied
+    dx2 = tc.sum(tc.square(model.x - lastx))
+    lastx.copy_(model.x) # copy_ updates in-place instead of reference or clone
+    # See if we're getting worse
+    if loss > lastloss * worse_margin and it-it_last_tighten > entry_it:
+      # Reduce lrn_rate
+      optimizer.param_groups[0]["lr"] /= 2
+      it_last_tighten = it
+      db_print(f"637: L > LL @ it={it+1};"
+        f"\tnew lrn_rate={optimizer.param_groups[0]['lr']}")
+    lastloss = loss
+    # Message every 1000 iterations
     it += 1
     if it%1000 == 0:
-      db_print(f"Iteration {it} / {maxit};\tloss={loss:.6f}")
+      db_print(f"Iteration {it} / {maxit};\tloss={loss:.3e};"
+        f"\tstopping loss={lstop:.3e}")
+      db_print(f"\tI={I:.4e};\trftol={rftol:.3e}")
+      db_print(f"\tdx={tc.sqrt(dx2)};\txtol={xtol}")
     losses.append(loss)
+
   # Save the losses so I can graph them
-  lossfile = util.genfilename() + "_losses.csv"
+  lossfile = "f_" + util.timestamp() + "_losses.csv"
   np.savetxt(lossfile, losses, delimiter=",")
   db_print("losses saved to file: "+lossfile)
   db_print("606, memory:\n"+tc.cuda.memory_summary(abbreviated=True))
@@ -953,13 +1002,13 @@ def gen_xi(fprms, Asp, options, times):
         params_i = fprms.copy()
         params_i["w"] = wi
         # Start with tighter tol and loosen as w increases
-        #   Start with 5x and work towards 1x
-        tol_div = 1 + (N_pre-i) / N_pre * 4
+        #   Start with 8 and work towards 1
+        tol_div = 1 + (N_pre-i) / N_pre * 7
         options_i = {
           "xi": xi,
           "method": ximethod,
-          "xtol": options["xtol"] if "xtol" in options else 1e-6,
-          "ftol": options["ftol"] if "ftol" in options else 1e-4,
+          "xtol": options["xtol"]/tol_div if "xtol" in options else 1e-6,
+          "ftol": options["ftol"]/tol_div if "ftol" in options else 1e-4,
           "on_cpu": False
         }
         soli = NL_sol(params_i, options_i)

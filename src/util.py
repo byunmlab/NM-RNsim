@@ -32,9 +32,10 @@ use_stdout = False
 log_indent = 0
 
 # Set up torch device
-#gpu = 0
-#device = tc.device(f"cuda:{gpu}" if tc.cuda.is_available() else "cpu")
-device = tc.device(f"cuda" if tc.cuda.is_available() else "cpu")
+gpu = 7
+device = tc.device(f"cuda:{gpu}" if tc.cuda.is_available() else "cpu")
+#device = tc.device(f"cuda" if tc.cuda.is_available() else "cpu")
+tc.cuda.set_device(device)
 
 def str2arr(s):
   """Converts a comma-separated list of floats to a np.array.
@@ -54,10 +55,10 @@ def bin_to_bools(Nbin):
   # This loops from the end to the 3rd character (so as to skip the "0b")
   return [ bool(int(i)) for i in Nbin[-1:1:-1] ]
 
-def genfilename():
-  """Generate a unique filename
+def timestamp():
+  """Generate a timestamp
   """
-  return "f_" + time.strftime("%Y%m%dT%H%M%S")
+  return time.strftime("%Y%m%dT%H%M%S")
 
 def ainsrt(x, insertions):
   """Insert a series of values at the specified indices into the given array.
