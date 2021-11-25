@@ -408,25 +408,27 @@ def NL_sol(params, options):
   if verbose > 2:
     db_print(f"Starting Nonlinear Solver: {method}")
 
-  # Create jit compiled versions of the function
   # TODO
+  # Create jit compiled versions of the function
   #jres = jax.jit(NL_res_j, static_argnums=[2,3,4,5,6,7])
   res = lambda x: NL_res(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
   #jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5,6,7])
   #TODO: AUTOGRAD JACOBIAN
-  jac = lambda x: jacf(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
-
+  jac = lambda x: jjac(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
   #toc(times, "jit")
 
   rxi = res(xi)
   db_print(f"||res(xi)||: {tc.linalg.norm(rxi)}")
-  toc(times)#, "res(xi)")
-  if method != "adpt" and tc.linalg.norm(rxi) < fopt["ftol"]: #1e-9:
-    # For adpt, ftol has a different meaning. TODO: use a different name?
+  toc(times)
+  # Treats ftol as relative to the current I
+  #   The 0.75 is because of uncertainty in the estimate for current
+  rstop = fopt["ftol"] * xi[-1] * 0.75
+  if tc.linalg.norm(rxi) < rstop:
     # If xi is already within tolerance, we're done
     sol = RNOptRes(x=xi, status=0, nfev=1, on_cpu=on_cpu)
     sol.fun = rxi
     sol.message = "xi is already within tolerance"
+    return sol
 
   elif method == "adpt":
     sol = NL_adpt(fprms, fopt)
