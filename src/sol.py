@@ -418,11 +418,11 @@ def NL_sol(params, options):
   #toc(times, "jit")
 
   rxi = res(xi)
-  db_print(f"||res(xi)||: {tc.linalg.norm(rxi)}")
   toc(times)
   # Treats ftol as relative to the current I
   #   The 0.75 is because of uncertainty in the estimate for current
   rstop = fopt["ftol"] * xi[-1] * 0.75
+  db_print(f"||res(xi)||: {tc.linalg.norm(rxi)}; rstop: {rstop}")
   if tc.linalg.norm(rxi) < rstop:
     # If xi is already within tolerance, we're done
     sol = RNOptRes(x=xi, status=0, nfev=1, on_cpu=on_cpu)
@@ -602,10 +602,10 @@ def NL_adam(res, xi, options):
   else:
     xtol = 1e-8
   # How much worse does loss need to be to trigger decreasing the learning rate?
-  worse_margin = 1.1
-  # Forgive jumpiness in the first entry_it iterations
-  entry_it = 500 #maxit / 20 #?
-  it_last_tighten = 0 # Last time we tightened the learning rate
+  worse_margin = 1.15
+  # Forgive jumpiness for grace_it iterations
+  grace_it = 100 #maxit / 20 #?
+  verbose = True
 
   # Initialize the pytorch model
   model = tcModel(Lfun, xi)
@@ -613,49 +613,74 @@ def NL_adam(res, xi, options):
   optimizer = tc.optim.Adam(model.parameters(), lr=lrn_rate)
   #optimizer = tc.optim.Adagrad(model.parameters(), lr=lrn_rate)
 
-  # Optimize
+  # -- Set up the optimization loop --
+  # Calculate initial loss and gradients
+  optimizer.zero_grad()
+  loss = model() 
+  loss.backward()
+  # Initialize some relevant variables
+  losses = [loss]
+  lstop = max(xi[-1]*rftol*0.75, tol_min)**2 # 0.75 is b/c of uncertainty in I
   it = 0
-  losses = []
-  loss = 100
-  lstop = 10
+  it_last_reset = 0
+  # Keep track of the best as well as the previous x and associated loss
+  bestx = tc.clone(xi)
+  bestl = loss
   lastx = tc.clone(xi)
-  lastloss = loss
+  lastl = loss
   # Will abort when the square of the euclidian distance between x and lastx
   #   is less than dx2stop. I.e. the distance from lastx to x < xtol.
   dx2stop = xtol**2
   dx2 = 2*dx2stop #tc.tensor(2*dx2stop, device=util.device)
+
+  # -- Optimization loop --
   while it < maxit and loss > lstop and dx2 > dx2stop:
+    optimizer.step() # Take a step (updates model.x in place)
+    # See how large dx was (or dx^2, rather)
+    dx2 = tc.sum(tc.square(model.x - lastx))
+    # See how the loss changed
     optimizer.zero_grad() # Zero the gradients
     loss = model() # Calculate loss
     loss.backward() # Calculate gradients
-    optimizer.step() # Take a step (updates model.x in place)
-    # Update the stopping conditions
-    I = model.x[-1]
-    # If rftol = 0.01, then the stopping error will be 1% of I
-    #   Unless that number is less than tol_min
-    # The stopping loss is (stopping error)**2
-    # TODO: the adpt method considers KCL error too and considers the max
-    lstop = max(I*rftol, tol_min)**2
-    # TODO: gtol?
-    # See if xtol stopping condition is satisfied
-    dx2 = tc.sum(tc.square(model.x - lastx))
-    lastx.copy_(model.x) # copy_ updates in-place instead of reference or clone
-    # See if we're getting worse
-    if loss > lastloss * worse_margin and it-it_last_tighten > entry_it:
+    # If this one is best, update best
+    if loss < bestl:
+      bestx.copy_(model.x) # Store model.x in bestx
+      bestl = loss
+      # Update lstop based on new best I
+      I = bestx[-1]
+      # If rftol = 0.01, then the stopping error will be 1% of I
+      #   Unless that number is less than tol_min
+      # The stopping loss is (stopping error)**2
+      # Note: the adpt method considers KCL error too and uses the max
+      #   I could impement that, but I think it'd add unnecessary computation
+      lstop = max(I*rftol, tol_min)**2
+    # If this one is much worse than the previous, then it's oscillating.
+    #   Tighten the learning rate and reset to best,
+    #   as long as it's been a while (>grace_it) since the last reset.
+    elif loss > lastl*worse_margin and it-it_last_reset > grace_it:
       # Reduce lrn_rate
       optimizer.param_groups[0]["lr"] /= 2
-      it_last_tighten = it
-      db_print(f"637: L > LL @ it={it+1};"
+      it_last_reset = it
+      # Reset x to bestx
+      model.x.data.copy_(bestx) # Store bestx in model.x.data
+      loss = bestl
+      db_print(f"663: reset @ it={it+1};"
         f"\tnew lrn_rate={optimizer.param_groups[0]['lr']}")
-    lastloss = loss
-    # Message every 1000 iterations
+    lastx.copy_(model.x) # copy_ updates in-place instead of reference or clone
+    lastl = loss
     it += 1
-    if it%1000 == 0:
+    # Message every 1000 iterations
+    if verbose and it%1000 == 0:
       db_print(f"Iteration {it} / {maxit};\tloss={loss:.3e};"
         f"\tstopping loss={lstop:.3e}")
       db_print(f"\tI={I:.4e};\trftol={rftol:.3e}")
       db_print(f"\tdx={tc.sqrt(dx2)};\txtol={xtol}")
     losses.append(loss)
+
+  # Make the reason for stopping clear
+  db_print(f"Loop stopped: it={it}, maxit={maxit}; "
+    f"loss={loss:.3e}, lstop={lstop:.3e}; "
+    f"dx={tc.sqrt(dx2):.3e}, xtol={xtol:.3e}")
 
   # Save the losses so I can graph them
   lossfile = "f_" + util.timestamp() + "_losses.csv"
@@ -663,13 +688,14 @@ def NL_adam(res, xi, options):
   db_print("losses saved to file: "+lossfile)
   db_print("606, memory:\n"+tc.cuda.memory_summary(abbreviated=True))
 
+  # Return the best x
   sol = RNOptRes(on_cpu=options["on_cpu"])
-  sol.x = model.x.detach()
-  sol.loss = model()
+  sol.x = bestx.detach()
+  sol.loss = bestl
   #sol.grad = jgx(sol.x)
   sol.it = it
-  sol.message = "MESSAGE STUB" # TMP
-  sol.success = True # TMP
+  sol.message = "MESSAGE STUB" # TODO
+  sol.success = True # TODO
   return sol
 
 def NL_adam_optax(jlx, jgx, xi, options):
@@ -1004,8 +1030,8 @@ def gen_xi(fprms, Asp, options, times):
         params_i = fprms.copy()
         params_i["w"] = wi
         # Start with tighter tol and loosen as w increases
-        #   Start with 8 and work towards 1
-        tol_div = 1 + (N_pre-i) / N_pre * 7
+        #   Start with 5x and work towards 1x
+        tol_div = 1 + (N_pre-i) / N_pre * 4
         options_i = {
           "xi": xi,
           "method": ximethod,
