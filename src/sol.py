@@ -445,6 +445,9 @@ def NL_sol(params, options):
     sol = NL_adam(res, xi, adam_options)
     toc(times, f"Pytorch Adam solver (w={w}, it={sol.it})")
 
+  elif method == "adpt":
+    sol = NL_adpt(fprms, fopt)
+
   elif method == "mlt":
     # Chain multiple solvers
     #ltol = 5e-3
@@ -465,7 +468,6 @@ def NL_sol(params, options):
       #("trf", stol),
       #("n-k", stol)]
     sol = NL_mlt(fprms, fopt, methods, ftol)
-    return sol
 
   elif method == "optax-adam":
     # TODO: broken
@@ -601,10 +603,14 @@ def NL_adam(res, xi, options):
     xtol = options["xtol"]
   else:
     xtol = 1e-8
-  # How much worse does loss need to be to trigger decreasing the learning rate?
-  worse_margin = 1.15
+  # How much worse does loss need to be than the best to trigger a reset?
+  worse_margin = 12
+  # How much worse does loss need to be than the previous to trigger a reset?
+  #   This is for when it's oscillating significantly --> decrease lrn_rate
+  osc_margin = 1.15
   # Forgive jumpiness for grace_it iterations
-  grace_it = 100 #maxit / 20 #?
+  grace_it_o = 100 #maxit / 20 #?
+  grace_it_w = 10 # If we're 8x worse than the best for 10 iterations, reset
   verbose = True
 
   # Initialize the pytorch model
@@ -657,14 +663,16 @@ def NL_adam(res, xi, options):
     # If this one is much worse than the previous, then it's oscillating.
     #   Tighten the learning rate and reset to best,
     #   as long as it's been a while (>grace_it) since the last reset.
-    elif loss > lastl*worse_margin and it-it_last_reset > grace_it:
+    #   Also, if we're much worse than the best, then reset.
+    elif ((loss > lastl*osc_margin and it-it_last_reset > grace_it_o) or
+        (loss > bestl*worse_margin and it-it_last_reset > grace_it_w)):
       # Reduce lrn_rate
       optimizer.param_groups[0]["lr"] /= 2
       it_last_reset = it
       # Reset x to bestx
       model.x.data.copy_(bestx) # Store bestx in model.x.data
       loss = bestl
-      db_print(f"663: reset @ it={it+1};"
+      db_print(f"reset @ it={it+1};"
         f"\tnew lrn_rate={optimizer.param_groups[0]['lr']}")
     lastx.copy_(model.x) # copy_ updates in-place instead of reference or clone
     lastl = loss
@@ -683,7 +691,7 @@ def NL_adam(res, xi, options):
     f"dx={tc.sqrt(dx2):.3e}, xtol={xtol:.3e}")
 
   # Save the losses so I can graph them
-  lossfile = "f_" + util.timestamp() + "_losses.csv"
+  lossfile = util.uniquef() + "_losses.csv"
   np.savetxt(lossfile, losses, delimiter=",")
   db_print("losses saved to file: "+lossfile)
   db_print("606, memory:\n"+tc.cuda.memory_summary(abbreviated=True))

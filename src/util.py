@@ -30,6 +30,8 @@ timing = False
 log_fname = "log_TEMP.txt"
 use_stdout = False
 log_indent = 0
+# Counter for unique filenames
+filenum = 0
 
 # Set up torch device
 gpu = 4
@@ -59,6 +61,14 @@ def timestamp():
   """Generate a timestamp
   """
   return time.strftime("%Y%m%dT%H%M%S")
+
+def uniquef():
+  """Generate a unique filename stub
+  """
+  global filenum
+  filenum += 1
+  fn = f"f{filenum}_{timestamp()}"
+  return fn
 
 def ainsrt(x, insertions):
   """Insert a series of values at the specified indices into the given array.
