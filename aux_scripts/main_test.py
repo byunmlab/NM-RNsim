@@ -19,6 +19,8 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".01"
 from argparse import ArgumentParser as ArPr
 from configparser import ConfigParser as CfPr
 import matplotlib.pyplot as plt # For plt.close()
+import networkx as nx
+import numpy as np
 #FOR TESTING
 import sys
 sys.path.append("../src")
@@ -165,16 +167,36 @@ def main():
   util.toc(times, "Drawing & saving")
   
   # Now do something with that rn
-  util.db_print(f"RN size: {rn.size()}")
+  N = rn.size()
+  util.db_print(f"RN size: {N}")
   util.db_print(f"RN edges: {rn.G.number_of_edges()}")
-  for v in [1,2,3]:
-    (p_max_e, e_p_max), (p_max_n, n_p_max), Req = rn.apply_v(v, "in0", "out0",
-      set_i=True)
-    i0 = rn.node("in0")["isnk"]
-    i1 = rn.node("out0")["isnk"]
-    print(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
-    if abs(i0+i1) > 1e-4:
-      print("Significant KCL error")
+  util.db_print(f"rn.G.nodes[0] = {rn.G.nodes[0]}")
+  
+  # Apply voltages
+  v = np.random.rand(N)
+  util.toc(times)
+  # Old way with boring loop
+  for i,n in enumerate(rn.node_list):
+    rn.G.nodes[n]["v"] = v[i]
+  util.toc(times, "old way: ")
+  
+  # New way
+  v += .5
+  dv = dict(zip(rn.node_list,[{"v":vi} for vi in v]))
+  nx.set_node_attributes(rn.G, dv)
+  util.toc(times, "new way: ")
+
+  util.db_print(f"rn.G.nodes[0] = {rn.G.nodes[0]}")
+
+
+  #for v in [1,2,3]:
+  #  (p_max_e, e_p_max), (p_max_n, n_p_max), Req = rn.apply_v(v, "in0", "out0",
+  #    set_i=True)
+  #  i0 = rn.node("in0")["isnk"]
+  #  i1 = rn.node("out0")["isnk"]
+  #  print(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
+  #  if abs(i0+i1) > 1e-4:
+  #    print("Significant KCL error")
 
   #print(167, p_max_e, e_p_max)
   #mpe = rn.get_maxp_edges(2)

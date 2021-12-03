@@ -777,6 +777,10 @@ class ResistorNetwork:
     I_in = result.I_in
     Req = result.Req
     
+    # NOTE: These for loops take forever with big networks.
+    #   TODO: Is there a better way?
+    #   Maybe dict(zip(i,[{"v":vi} for vi in v])) ?
+    #   It looks like that'd be slower
     # Save the voltages in the nodes
     if set_v:
       self.applied_v = v_in

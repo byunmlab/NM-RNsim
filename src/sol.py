@@ -421,7 +421,7 @@ def NL_sol(params, options):
   toc(times)
   # Treats ftol as relative to the current I
   #   The 0.75 is because of uncertainty in the estimate for current
-  rstop = fopt["ftol"] * xi[-1] * 0.75
+  rstop = max(fopt["ftol"] * xi[-1] * 0.75, tol_min)
   db_print(f"||res(xi)||: {tc.linalg.norm(rxi)}; rstop: {rstop}")
   if tc.linalg.norm(rxi) < rstop:
     # If xi is already within tolerance, we're done
@@ -637,7 +637,7 @@ def NL_adam(res, xi, options):
   # Will abort when the square of the euclidian distance between x and lastx
   #   is less than dx2stop. I.e. the distance from lastx to x < xtol.
   dx2stop = xtol**2
-  dx2 = 2*dx2stop #tc.tensor(2*dx2stop, device=util.device)
+  dx2 = tc.tensor(2*dx2stop, device=util.device)
 
   # -- Optimization loop --
   while it < maxit and loss > lstop and dx2 > dx2stop:

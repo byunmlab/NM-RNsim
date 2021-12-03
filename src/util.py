@@ -34,7 +34,7 @@ log_indent = 0
 filenum = 0
 
 # Set up torch device
-gpu = 4
+gpu = 7
 device = tc.device(f"cuda:{gpu}" if tc.cuda.is_available() else "cpu")
 #device = tc.device(f"cuda" if tc.cuda.is_available() else "cpu")
 tc.cuda.set_device(device)

@@ -280,6 +280,7 @@ def scan_iv_sim(cp, rn):
   V_max = cp.getfloat(sim_section, "V_max")
   V_step = cp.getfloat(sim_section, "V_step")
   save_last_RN = cp.getboolean(sim_section, "save_last_RN")
+  burning = cp.getboolean(sim_section, "burn")
   
   # Pseudocode:
   #   1. Apply V volts
@@ -306,19 +307,25 @@ def scan_iv_sim(cp, rn):
   for i in range(Vs.size):
     toc(times)
     # Apply V volts, save the power, and get the Req
-    *_, Req = rn.apply_v(Vs[i], p0, p1)
+    *_, Req = rn.apply_v(Vs[i], p0, p1, set_i=True)
     toc(times, "Apply v")
 
-    # I = V / Req
-    Is[i] = Vs[i] / Req
+    # Convert keys to indices
+    #p0i = rn.key_to_index(p0)
+    #p1i = rn.key_to_index(p1)
+    # Current flowing through RN
+    I_in = - rn.G.nodes[p0]["isnk"]
+    I_out = rn.G.nodes[p1]["isnk"]
+    db_print(f"I_in={I_in}; I_out={I_out}; diff={I_out-I_in}")
+    Is[i] = (I_in + I_out) / 2 # Use avg, though they should be equal
     # Save this V, I coordinate to the pt log
     pt_log = open(pt_log_fname, "a")
     pt_log.write(f"{Vs[i]}, {Is[i]}\n")
 
-    # Burn out anything that has too much power
-    num_burned = rn.burn()
-
-    db_print(f"Point {i}: {Vs[i]}, {Is[i]}. {num_burned} fibers burned.")
+    if burning:
+      # Burn out anything that has too much power
+      num_burned = rn.burn()
+      db_print(f"Point {i}: {Vs[i]}, {Is[i]}. {num_burned} fibers burned.")
   
   fig, ax = plt.subplots()
   figname = f"IV_curve_{cp.sim_id}"
