@@ -42,8 +42,8 @@ class ResistorNetwork:
   ftol = 1e-3
 
   # Training options
-  fpV = .5 # Fwd pass voltage for training
-  bpV = 2 # Bwd pass voltage for training
+  fpV = .02 # Fwd pass voltage for training
+  bpV = .1 # Bwd pass voltage for training
   # Current threshold for determining what is high
   threshold = 0.5
   # When dynamically resetting the threshold, what fraction of the lowest current desired output should the threshold be set to.
@@ -53,7 +53,7 @@ class ResistorNetwork:
   # Used if burn power was not specified in config
   brn_pwr = 1
   # Whether to burn fibers or edges when training
-  burn_fibers = True
+  burn_fibers = False
 
   def __init__(self, N=500, limits=[0,1, 0,1], in_pins=[], out_pins=[],
     pts=None, cnd_len=0.15, pin_r=0.25, fibers=True, 

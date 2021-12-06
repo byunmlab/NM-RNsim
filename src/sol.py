@@ -440,7 +440,8 @@ def NL_sol(params, options):
       "maxit": 50000,
       "on_cpu": on_cpu,
       "rftol": fopt["ftol"],
-      "xtol": fopt["xtol"]
+      "xtol": fopt["xtol"],
+      "verbose": verbose
     }
     sol = NL_adam(res, xi, adam_options)
     toc(times, f"Pytorch Adam solver (w={w}, it={sol.it})")
@@ -611,7 +612,7 @@ def NL_adam(res, xi, options):
   # Forgive jumpiness for grace_it iterations
   grace_it_o = 100 #maxit / 20 #?
   grace_it_w = 10 # If we're 8x worse than the best for 10 iterations, reset
-  verbose = True
+  verbose = options["verbose"]
 
   # Initialize the pytorch model
   model = tcModel(Lfun, xi)
@@ -678,7 +679,7 @@ def NL_adam(res, xi, options):
     lastl = loss
     it += 1
     # Message every 1000 iterations
-    if verbose and it%1000 == 0:
+    if verbose>0 and it%1000 == 0:
       db_print(f"Iteration {it} / {maxit};\tloss={loss:.3e};"
         f"\tstopping loss={lstop:.3e}")
       db_print(f"\tI={I:.4e};\trftol={rftol:.3e}")
@@ -690,11 +691,12 @@ def NL_adam(res, xi, options):
     f"loss={loss:.3e}, lstop={lstop:.3e}; "
     f"dx={tc.sqrt(dx2):.3e}, xtol={xtol:.3e}")
 
-  # Save the losses so I can graph them
-  lossfile = util.uniquef() + "_losses.csv"
-  np.savetxt(lossfile, losses, delimiter=",")
-  db_print("losses saved to file: "+lossfile)
-  db_print("606, memory:\n"+tc.cuda.memory_summary(abbreviated=True))
+  if verbose>1:
+    # Save the losses so I can graph them
+    lossfile = util.uniquef() + "_losses.csv"
+    np.savetxt(lossfile, losses, delimiter=",")
+    db_print("losses saved to file: "+lossfile)
+    #db_print("606, memory:\n"+tc.cuda.memory_summary(abbreviated=True))
 
   # Return the best x
   sol = RNOptRes(on_cpu=options["on_cpu"])

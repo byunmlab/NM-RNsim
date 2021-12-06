@@ -56,6 +56,7 @@ def res_sim(cp, rn):
   p0 = cp.get("sim-res", "pin0")
   p1 = cp.get("sim-res", "pin1")
   details = True
+  save_RN = True
   
   times = tic()
   if details:
@@ -64,14 +65,16 @@ def res_sim(cp, rn):
     i0 = rn.node(p0)["isnk"]
     i1 = rn.node(p1)["isnk"]
     sim_log(f"i_in: {-i0}; i_out: {i1}; diff: {i0+i1}")
-    if abs(i0+i1) > 1e-4:
+    if abs(i0+i1) > 1e-2 * abs(i0): # 1% of I
       sim_log("Significant KCL error")
   else:
     # Calculate the Req
     R = rn.R_pp(p0, p1)
-    # Display the result
+  if save_RN:
+    RN.save_RN(rn, f"res_{cp.sim_id}.{cp.save_format}")
+  # Display the result
   sim_log(f"The equivalent resistance between {p0} and {p1} is {R}")
-  toc(times, "Calculating Req")
+  toc(times, "Calculating Req", total=True)
 
 def expand_sim(cp, rn):
   """Find the equivalent resistance between two pins in the RN before and
