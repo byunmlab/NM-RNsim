@@ -1,11 +1,10 @@
-networkx
+# Unfortunately it seems that newer versions of networkx are causing problems
+networkx == 2.5
 matplotlib
 numpy
 scipy
-os
-time
 argparse
 configparser
-pickle
-json
-gzip
+pandas
+# For jax
+optax
