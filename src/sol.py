@@ -378,20 +378,21 @@ def NL_sol(params, options):
   res = lambda x: jres(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
   jjac = jax.jit(jax.jacfwd(jres), static_argnums=[2,3,4,5,6,7])
   jac = lambda x: jjac(x, A, w, pinids, v_in, ni_in, ni_out, ivfun)
-
   #toc(times, "jit")
+
   rxi = res(xi)
-  db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}")
   toc(times)#, "res(xi)")
-  if method != "adpt" and jnp.linalg.norm(rxi) < fopt["ftol"]: #1e-9:
-    # For adpt, ftol has a different meaning. TODO: use a different name?
+  # Treats ftol as relative to the current I
+  #   The 0.75 is because of uncertainty in the estimate for current
+  rstop = fopt["ftol"] * xi[-1] * 0.75
+  db_print(f"||res(xi)||: {jnp.linalg.norm(rxi)}; rstop: {rstop}")
+  if jnp.linalg.norm(rxi) < rstop:
     # If xi is already within tolerance, we're done
     sol = RNOptRes(x=xi, status=0, nfev=1)
     sol.fun = rxi
-    sol.message = "The linear model was sufficient in this case"
-    return sol
+    sol.message = "xi is already within tolerance"
 
-  if method == "adpt":
+  elif method == "adpt":
     sol = NL_adpt(fprms, fopt)
 
   elif method == "mlt":
@@ -842,11 +843,14 @@ def gen_xi(fprms, Asp, options, times):
         db_print(f"Pre-solving with w={wi}")
         params_i = fprms.copy()
         params_i["w"] = wi
+        # Start with tighter tol and loosen as w increases
+        #   Start with 5x and work towards 1x
+        tol_div = 1 + (N_pre-i) / N_pre * 4
         options_i = {
           "xi": xi,
           "method": ximethod,
-          "xtol": options["xtol"] if "xtol" in options else 1e-6,
-          "ftol": options["ftol"] if "ftol" in options else 1e-4
+          "xtol": options["xtol"]/tol_div if "xtol" in options else 1e-6,
+          "ftol": options["ftol"]/tol_div if "ftol" in options else 1e-4,
         }
         soli = NL_sol(params_i, options_i)
         #db_print(soli.__dict__)
