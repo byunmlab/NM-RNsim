@@ -7,4 +7,7 @@ argparse
 configparser
 pandas
 # For jax
-optax
+#optax
+# For pytorch, the torch package should be installed, but I don't include it
+#	here because it should be installed carefully so as to interface 
+#	properly with the GPU.
