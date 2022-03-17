@@ -23,3 +23,10 @@ conductivity.
 Future versions of this simulator could attempt to model some of these other
 mechanisms to better represent the physical system.
 
+## Note about git repository
+The original git repository became bloated by binary files that shouldn't have
+been committed. On 2022-03-17, I grafted off of the history of the original
+repo, starting at 2021-07-13, to create this repository.
+
+The original repository can be found [here](https://github.com/jonkb/NMLab).
+
