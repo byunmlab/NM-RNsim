@@ -1,0 +1,82 @@
+CURRENT TO DO:
+- Migrate to jax + optax
+  - set up docker image (w/ nvidia cuda + jax)
+- Separate the fwd_pass and RMSR calculation into two functions
+- See if we can recreate XORs with the new NL system
+- Speed up the solvers?
+- If it's still giving me trouble, I can reduce res_w. That should help.
+
+Expansions:
+- Scale / configure sim better to reality
+  - https://www.conductivecomposites.com/pdf/Nanostrand_datasheet.pdf
+  - Can I model Inductance & Capacitance? Will that be significant?
+- Maybe add a probabalistic function for which burns
+- Work on a version of NL_sol that has diodes on the outputs.
+  - It doesn't seem that backwards currents happen naturally. I don't think it's worth the trouble since it would make the matrix non-symmetrical... (though that isn't a problem with some of the NL solvers)
+- Things to try
+  - Isolate the pins from each other with walls
+    - Ooh, or we can burn between them! i0-i1 & o0-o1 (preburning)
+  - Change order of training?
+  - Nonlinear Feedback?
+
+IN PROGRESS:
+112_v3 : Repeat 112 with really NL system
+113 : Vary the fiber length distribution stddev
+
+RECENTLY DONE:
+- Run new FP on 100_18r2 --> Not XOR
+- mlt method: xi from cg or hybr
+112_v2 : Repeat of 112, but with NL output current calculation.
+112 : Repeat 97 (vary ks), with new burn technique.
+111_v2 : Repeat of 111 but with new, adaptive burn_rate
+111 : Same idea as 110, but with a smaller network
+- fix how sum_currents uses Ohm's law
+110 : Repeat 109 with slightly less sparsity & higher max_epochs
+109 : Try to replicate 101
+- Burn_rate # proportional to pin error. If it's nearly there, burn almost nothing.
+  - Error metric: <90% --> 0 burning; 100% --> 50% burning; >110% --> 100% burning
+- Report whether any of the pins are completely burnt out after each epoch. Save that in the csv so we can exclude those data points.
+108 : Compare preburning to w/o preburning
+107 : Try to replicate 100_18 - No successful.
+106 : Vary ftype_proportions
+
+OLDER DONE:
+105 : Try with lower ks
+101B : Continuation of 101 (one difference: new power calculation)
+102_v2 : Redo 102 with accurate NL power calculation.
+102 : Redo 98 with // burn method.
+101 : Redo 99 with new burn method.
+100 : Fixed the burn so it's actually parallel! Redo 97.
+99 : 8 copies of a larger RN with less burning per epoch.
+- Add capacity to identify the nodes that were deleted between two RN states and plot those.
+98 : Analyze varying fiber length. --> Inconclusive
+- Fix the power calculation to be more accurate for nonlinear power. Earlier it was p=v**2/R, now it's p=v*i(G,w,v) (After sim 102)
+- Fix burn method so it's actually //
+- In 3d with fibers, since I can't change the fiber color easily in quiver, 
+  add colored blobs underneath (scatter + zorder) for fiber_color
+- 97 : vary ks from 1.6 to 1.9, with N=4.5k
+- 95,96 : Vary ks from 1.5 to 1.9
+- Add xtol to options
+- Change the burn method so it burns anything with similar power levels to the highest power node (epsilon burn)
+- Add argparser to main.py : Make it easier to run lots of different simulations by using one config file with different CLI options to supercede certain settings
+- 89 - 92 : train_set sims with N=2k-2.5k. Now with 4-8 cycles.
+- 93,94 : vary res_w and bpwr
+
+Questions:
+- Why do they burn near V+, not V-? Bug? 
+  - I think it was just coincidence... Or maybe it's an artifact of the cg method.
+  - Is it consistent? Kind of, so far...
+
+Speed Optimization:
+- Time to find efficiency and complexity of each step & optimize
+- Tune cg method by providing the guesses that make it faster and more accurate
+- Time cg with different amounts of multithreading --> Fix it so it can do multithreading?
+- Work on making n-k faster
+- GPU acceleration
+- (BACKBURNER) Optimize the performance of the solvers
+  - rdiff and line_search for n-k
+  - preconditioning? (Only for cg?)
+  - smarter initial guesses?
+  - It seems that hybr is faster, but n-k may have lower complexity. Maybe...
+  - What if I always limit the number of iterations instead of having a set tolerance? That seems like a bad idea.
+

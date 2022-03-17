@@ -1,0 +1,5 @@
+numpy.linalg uses multithreading, so it can use too much of the server resources.
+To keep this in check, do the following to set the number of threads used:
+
+export OPENBLAS_NUM_THREADS=8
+

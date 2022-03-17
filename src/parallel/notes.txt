@@ -1,0 +1,10 @@
+numpy.linalg uses multithreading, so it can use too much of the server resources.
+To keep this in check, do the following to set the number of threads used:
+
+export OPENBLAS_NUM_THREADS=4
+
+See https://stackoverflow.com/questions/30791550/limit-number-of-threads-in-numpy
+
+
+CAREFUL! I think scipy cg() uses a different multithreading library. Anyway, it seems like each process is using 1500% at peak, which is troubling. Don't do any parallel sims until I figure out how to limit multithreading with every library I use.
+

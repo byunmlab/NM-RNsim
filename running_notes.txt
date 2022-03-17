@@ -1,0 +1,12 @@
+Notes on running the program:
+- cd into /src/
+- edit the settings in config.ini as desired
+- to run:
+	$ python3 -u main.py &> "logfile.txt" &
+	or $ nohup python3 -u main.py &> "logfile.txt" &
+- My process has also included 
+  - Making a copy of the config.ini file
+  - Making a directory in NMLAB/test_results for the test
+  - Moving all the related files there after the simulation is done.
+
+- see parallel folder for notes on running in parallel
