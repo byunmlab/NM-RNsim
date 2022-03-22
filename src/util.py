@@ -1,14 +1,38 @@
 """ Script that contains utility functions
 
-  str2arr
-  str2bool
-  bin_to_bools : Convert a binary string to a list of booleans
-  db_print
-  tic & toc : Functions for timing and printing timing messages
-  load_IO : Load an IO csv file
-  IO_code : Evaluate a set of IO currents against the desired IO pattern
-  LS_pt_dist : Return the minimum distance between a line segment and a point
-  min_LS_dist : Return the minimum distance between two line segments
+  NOTE: I was thinking of splitting this into a couple of classes so that
+    they would certainly be initialized, but then I'd need to pass around a 
+    logger object somehow. I suppose the logger object would be greated in 
+    the main function and a reference stored in RN as well as in sol? Or maybe
+    sol should be instantiated as an object by RN or by main. Then the main
+    function would instantiate several objects (like a logger, a solver, & a
+    math extension object) and hand them all to RN in its init. Or if any of
+    them are only used by the RN, they could be generated in its init. I'm
+    kind of straddling OOP and FP
+
+  CATEGORIES: math*, logging*, other (timing*, filenames, conversions)
+    *Requires initialization
+
+  MISC
+    str2arr
+    str2bool
+    bin_to_bools : Convert a binary string to a list of booleans
+    timestamp
+    uniquef
+  MATH
+    ainsrt
+    sps_to_tct
+  LOGGING
+    sim_log
+    db_print
+    tic & toc : Functions for timing and printing timing messages
+  MISC
+    load_IO : Load an IO csv file
+    IO_code : Evaluate a set of IO currents against the desired IO pattern
+  MATH
+    LS_pt_dist : Return the minimum distance between a line segment and a point
+    min_LS_dist : Return the minimum distance between two line segments
+    parabola_opt
 
 """
 
