@@ -62,12 +62,8 @@ def prep_options(options_dict):
   cp.read(cp.config_file)
   alter_cp(cp, args, options_dict)
   
-  # Set the debugging variable in util
-  util.debug = cp.getboolean("exec", "debug")
-  # Set the timing variable in util
-  util.timing = cp.getboolean("exec", "timing")
-  # TEMP
-  util.log_fname = f"""log_{cp.sim_id}.txt"""
+  # Initialize the settings that are stored in util
+  util.init(cp)
   
   return cp
 

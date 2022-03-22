@@ -32,12 +32,27 @@ use_stdout = False
 log_indent = 0
 # Counter for unique filenames
 filenum = 0
+device = 0 # TEMP
 
-# Set up torch device
-gpu = 7
-device = tc.device(f"cuda:{gpu}" if tc.cuda.is_available() else "cpu")
-#device = tc.device(f"cuda" if tc.cuda.is_available() else "cpu")
-tc.cuda.set_device(device)
+def init(cp):
+  """Initialize constants according to the given configuration object
+  Also set up the connection to the GPU
+  TODO: Maybe this should be a class so I can ensure that init is called first
+  """
+  global debug, timing, log_fname, device, gpu
+  # Set the debugging variable in util
+  debug = cp.getboolean("exec", "debug")
+  # Set the timing variable in util
+  timing = cp.getboolean("exec", "timing")
+  # TEMP
+  log_fname = f"""log_{cp.sim_id}.txt"""
+
+  # Set up torch device
+  gpu = cp.getint("exec", "gpu")
+  device = tc.device(f"cuda:{gpu}" if (tc.cuda.is_available() and gpu >= 0)
+    else "cpu")
+  #device = tc.device(f"cuda" if tc.cuda.is_available() else "cpu")
+  tc.cuda.set_device(device)
 
 def str2arr(s):
   """Converts a comma-separated list of floats to a np.array.
@@ -99,6 +114,8 @@ def ainsrt2(x, i0, v0, i1, v1):
   """Insert a series of values at the specified indices into the given array.
   insertions : [(i0, v0), (i1, v1)]
   Like ainsrt, but specifically for inserting 2 values and compatible with jit.
+
+  Make sure to run init() first
   """
   if not tc.is_tensor(x):
     x = tc.tensor(x, device=device)
@@ -114,6 +131,8 @@ def ainsrt2(x, i0, v0, i1, v1):
 
 def sps_to_tct(M):
   """sps matrix to torch.tensor
+
+  Make sure to run init() first
   """
   coo = sps.coo_matrix(M)
   values = coo.data
