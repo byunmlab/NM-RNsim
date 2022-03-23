@@ -40,6 +40,7 @@ class ResistorNetwork:
   # Stopping tolerance in x for nonlinear solvers.
   xtol = 1e-3
   ftol = 1e-3
+  maxit = 50000
 
   # Training options
   fpV = .02 # Fwd pass voltage for training
@@ -180,6 +181,7 @@ class ResistorNetwork:
     cls.ivfun = cp.get("RN-res", "ivfun")
     cls.xtol = cp.getfloat("RN-res", "xtol")
     cls.ftol = cp.getfloat("RN-res", "ftol")
+    cls.maxit = cp.getint("RN-res", "maxit")
     # Load the plotting options
     cls.plt_node_size = cp.getfloat("plot", "node_size")
     cls.plt_ln_width = cp.getfloat("plot", "ln_width")
@@ -754,7 +756,8 @@ class ResistorNetwork:
       "verbose" : vrb,
       "xtol" : self.xtol,
       "ftol" : self.ftol,
-      "xi" : self.xi_method
+      "xi" : self.xi_method,
+      "maxit" : self.maxit
     }
     if self.ivfun == "L":
       # Get the Laplacian matrix for conductance

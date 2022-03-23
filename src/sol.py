@@ -387,6 +387,7 @@ def NL_sol(params, options):
   method = options["method"]
   verbose = options["verbose"] if "verbose" in options else util.debug
   on_cpu = options["on_cpu"] if "on_cpu" in options else True
+  maxit = options["maxit"] if "maxit" in options else 50000
 
   # If verbose is not an int, then make it a 0/1 bool
   if type(verbose) != int:
@@ -437,7 +438,7 @@ def NL_sol(params, options):
     # Parameters
     adam_options = {
       "lrn_rate": 1e-6,
-      "maxit": 50000,
+      "maxit": maxit,
       "on_cpu": on_cpu,
       "rftol": fopt["ftol"],
       "xtol": fopt["xtol"],
@@ -593,7 +594,7 @@ def NL_adam(res, xi, options):
   """
   Lfun = lambda x: L22(res(x))
   lrn_rate = options["lrn_rate"] if "lrn_rate" in options else 1e-6
-  maxit = options["maxit"] if "maxit" in options else 1000
+  maxit = options["maxit"] if "maxit" in options else 10000
   if "rftol" in options:
     rftol = options["rftol"]
   elif "ftol" in options:
