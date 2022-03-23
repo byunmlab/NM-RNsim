@@ -1046,6 +1046,7 @@ def gen_xi(fprms, Asp, options, times):
         options_i = {
           "xi": xi,
           "method": ximethod,
+          "maxit": options["maxit"],
           "xtol": options["xtol"]/tol_div if "xtol" in options else 1e-6,
           "ftol": options["ftol"]/tol_div if "ftol" in options else 1e-4,
           "on_cpu": False
