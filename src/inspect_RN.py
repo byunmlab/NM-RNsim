@@ -27,6 +27,8 @@ parser.add_argument("-v", "--voltage", action="store_true",
   help="Save the voltage at every node to file")
 parser.add_argument("-i", "--current", action="store_true",
   help="Save the current flowing through every node to file")
+parser.add_argument("-p", "--power", action="store_true",
+  help="Save the power flowing through every node to file")
 parser.add_argument("-x", "--node_pos", action="store_true",
   help="Save the xyz position of each node")
 parser.add_argument("-I", "--image", action="store_true",
@@ -54,6 +56,7 @@ compress = args.no_compress
 save_Lpl = args.Laplacian
 save_v = args.voltage
 save_i = args.current
+save_p = args.power
 save_xyz = args.node_pos
 save_fig = args.image
 count_N = args.count_nodes
@@ -161,11 +164,11 @@ def inspect_RN(filename):
   if save_i:
     # Save the current flowing through each node to file
     # TODO: allow user to specify a config file instead
-    rn.res_w = 10
-    rn.sol_method = "mlt"
+    rn.res_w = 100
+    rn.sol_method = "tc-adam"
     rn.ivfun = "sinh"
     print("Warning: This will not work correctly unless the cls_config settings"
-      " for resistance are set correctly.")
+      " for resistance are set correctly here in inspect_RN.py.")
 
     i_dict, s_dict = rn.through_currents(ret_sink=True, store=True)
     save_fname = trm_fname + "_i.csv"
@@ -175,6 +178,17 @@ def inspect_RN(filename):
       ifile.write(f"{node}, {i}, {s_dict[node]}\n")
     ifile.close()
     print("Current flowing through each node saved to file:", save_fname)
+
+  if save_p:
+    # Save the power flowing through each node to file
+    # TODO: allow user to specify a config file instead
+    #rn.res_w = 100
+    #rn.sol_method = "tc-adam"
+    #rn.ivfun = "sinh"
+    #print("Warning: This will not work correctly unless the cls_config settings"
+    #  " for resistance are set correctly here in inspect_RN.py.")
+    print("SAVING POWER TO FILE NOT YET IMPLEMENTED")
+    # This is not nearly as easy to do as save_v and save_i
 
   if save_xyz:
     # Save the position of each node to file
@@ -193,7 +207,14 @@ def inspect_RN(filename):
     i_color = "#0652ff" #"aqua" #"gold"
     
     print("Plotting...")
-    if save_v and save_i:
+    # if p, plot power
+    # if some combination of v & i, plot that combination
+    # else plot default (fibers & junctions)
+    if save_p:
+      # Make a plot of power in the edges
+      fig, ax = rn.draw(edge_color="r", width_attrib="p")
+      save_fname = trm_fname + "_p.png"
+    elif save_v and save_i:
       fig, ax = rn.draw(edge_color=i_color, width_attrib="i", 
         color_attrib="v", annotate_is=True)
       save_fname = trm_fname + "_vi.png"
